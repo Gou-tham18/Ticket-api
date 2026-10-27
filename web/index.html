@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Ticket overview</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #ddd; }
+    .stat { display: inline-block; margin-right: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Ticket overview</h1>
+  <div id="summary">Loading summary...</div>
+  <h2>Latest tickets</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Created</th><th>Category</th><th>Priority</th><th>Status</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <script>
+    function showDate(text) {
+      const d = new Date(text.replace(" ", "T"));
+      return d.getDate() + "/" + d.getMonth() + "/" + d.getFullYear();
+    }
+
+    async function load() {
+      const summary = await (await fetch("/summary")).json();
+      document.getElementById("summary").innerHTML =
+        '<span class="stat"><b>' + summary.total + '</b> tickets</span>' +
+        '<span class="stat"><b>' + summary.average_resolution_hours + '</b> hours average resolution</span>';
+      const tickets = await (await fetch("/tickets?page=1&size=10")).json();
+      document.getElementById("rows").innerHTML = tickets.map(t =>
+        "<tr><td>" + t.ticket_id + "</td><td>" + showDate(t.created_at) + "</td><td>" +
+        t.category + "</td><td>" + t.priority + "</td><td>" + t.status + "</td></tr>").join("");
+    }
+    load();
+  </script>
+</body>
+</html>
