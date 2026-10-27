@@ -1,0 +1,61 @@
+ticket_id,created_at,resolved_at,category,priority,status
+TCK-1001,2026-03-02 08:23,2026-03-02 17:23,Billing,urgent,closed
+TCK-1002,2026-03-02 14:59,2026-03-04 16:45,Shipping,low,resolved
+TCK-1003,2026-03-02 17:59,2026-03-03 14:39,Refunds,normal,resolved
+TCK-1004,2026-03-02 19:55,2026-03-02 22:11,Refunds,urgent,resolved
+TCK-1005,2026-03-03 17:01,,Technical,normal,open
+TCK-1006,2026-03-06 00:12,2026-03-06 13:09,Technical,high,resolved
+TCK-1007,2026-03-06 02:18,,Shipping,high,open
+TCK-1008,2026-03-06 06:18,2026-03-08 04:31,Shipping,normal,resolved
+TCK-1009,2026-03-06 15:42,2026-03-07 17:34,Technical,normal,resolved
+TCK-1010,2026-03-06 16:41,,Account,urgent,open
+TCK-1011,2026-03-07 14:30,2026-03-07 21:11,Refunds,high,closed
+TCK-1012,2026-03-07 18:43,,Billing,high,open
+TCK-1013,2026-03-08 03:19,,Technical,normal,open
+TCK-1014,2026-03-08 11:58,,Shipping,normal,open
+TCK-1015,2026-03-09 06:38,2026-03-16 03:46,Billing,low,resolved
+TCK-1016,2026-03-09 15:34,2026-03-09 19:57,Login,high,closed
+TCK-1017,2026-03-09 19:46,2026-03-10 19:50,Refunds,normal,resolved
+TCK-1018,2026-03-10 04:16,,Technical,normal,open
+TCK-1019,2026-03-10 07:55,2026-03-12 12:00,Refunds,low,resolved
+TCK-1020,2026-03-10 08:45,,Technical,low,open
+TCK-1021,2026-03-10 08:57,2026-03-11 01:26,Login,normal,resolved
+TCK-1022,2026-03-10 10:34,2026-03-10 22:08,Refunds,high,resolved
+TCK-1023,2026-03-10 12:21,2026-03-11 15:21,Refunds,normal,closed
+TCK-1024,2026-03-10 21:50,,Billing,urgent,open
+TCK-1025,2026-03-10 22:43,,Account,low,in_progress
+TCK-1026,2026-03-11 02:46,2026-03-12 02:07,Technical,normal,closed
+TCK-1027,2026-03-11 11:53,,Refunds,normal,open
+TCK-1028,2026-03-12 01:48,2026-03-14 05:36,Login,low,resolved
+TCK-1029,2026-03-12 02:45,2026-03-12 16:30,Technical,urgent,resolved
+TCK-1030,2026-03-12 10:53,,Billing,normal,in_progress
+TCK-1031,2026-03-12 12:05,2026-03-12 20:49,Technical,high,closed
+TCK-1032,2026-03-12 19:21,2026-03-16 09:47,Account,low,closed
+TCK-1033,2026-03-13 01:28,2026-03-13 14:35,Login,normal,resolved
+TCK-1034,2026-03-13 07:02,2026-03-13 17:05,Login,high,closed
+TCK-1035,2026-03-14 13:39,2026-03-14 16:08,Account,urgent,resolved
+TCK-1036,2026-03-15 01:53,2026-03-17 06:08,Account,low,closed
+TCK-1037,2026-03-15 10:46,2026-03-15 16:55,Shipping,urgent,resolved
+TCK-1038,2026-03-15 11:11,2026-03-15 13:18,Login,high,resolved
+TCK-1039,2026-03-16 08:48,2026-03-17 13:42,Refunds,normal,resolved
+TCK-1040,2026-03-16 23:24,2026-03-17 23:25,Technical,normal,resolved
+TCK-1041,2026-03-17 07:45,2026-03-18 08:26,Shipping,normal,resolved
+TCK-1042,2026-03-17 13:03,2026-03-17 16:05,Account,urgent,resolved
+TCK-1043,2026-03-17 17:47,2026-03-17 23:24,Login,normal,closed
+TCK-1044,2026-03-17 20:20,2026-03-17 23:48,Technical,urgent,resolved
+TCK-1045,2026-03-18 06:50,2026-03-18 09:15,Login,urgent,resolved
+TCK-1046,2026-03-18 23:53,2026-03-19 04:24,Billing,normal,closed
+TCK-1047,2026-03-19 03:58,2026-03-19 06:32,Billing,high,resolved
+TCK-1048,2026-03-19 15:08,2026-03-22 04:31,Refunds,low,resolved
+TCK-1049,2026-03-19 19:16,2026-03-20 15:24,Shipping,normal,closed
+TCK-1050,2026-03-19 20:18,,Account,normal,in_progress
+TCK-1051,2026-03-19 23:43,2026-03-20 14:10,Account,high,resolved
+TCK-1052,2026-03-20 02:49,2026-03-22 03:18,Technical,normal,resolved
+TCK-1053,2026-03-20 02:50,,Shipping,normal,in_progress
+TCK-1054,2026-03-20 03:58,,Login,high,open
+TCK-1055,2026-03-20 05:17,,Shipping,normal,in_progress
+TCK-1056,2026-03-20 06:30,,Billing,low,in_progress
+TCK-1057,2026-03-20 12:25,2026-03-20 20:42,Billing,high,resolved
+TCK-1058,2026-03-20 15:30,2026-03-22 16:41,Login,low,resolved
+TCK-1059,2026-03-21 01:14,2026-03-21 17:08,Refunds,normal,resolved
+TCK-1060,2026-03-21 16:49,,Refunds,high,open
