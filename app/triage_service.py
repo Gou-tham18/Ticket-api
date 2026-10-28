@@ -3,17 +3,21 @@ import json
 import os
 import re
 from typing import Literal
-from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
 
+from google import genai
+from google.genai import types
 from pydantic import BaseModel, Field, field_validator
 
 from app.retrieval import retrieve_articles
 
 
 ALLOWED_CATEGORIES = {
-    "Billing", "Login", "Shipping",
-    "Refunds", "Technical", "Account",
+    "Billing",
+    "Login",
+    "Shipping",
+    "Refunds",
+    "Technical",
+    "Account",
 }
 
 ALLOWED_PRIORITIES = {"urgent", "high", "normal", "low"}
@@ -42,8 +46,12 @@ class TriageRequest(BaseModel):
 
 class TriageResult(BaseModel):
     category: Literal[
-        "Billing", "Login", "Shipping",
-        "Refunds", "Technical", "Account",
+        "Billing",
+        "Login",
+        "Shipping",
+        "Refunds",
+        "Technical",
+        "Account",
     ]
     priority: Literal["urgent", "high", "normal", "low"]
     suggested_reply: str
@@ -62,36 +70,85 @@ def fallback_category(subject: str, text: str) -> str:
     ticket = normalize(f"{subject} {text}")
 
     rules = [
-        ("Refunds", [
-            "refund", "reimbursement", "money back",
-            "refund not received", "refund status",
-        ]),
-        ("Shipping", [
-            "shipping", "shipment", "delivery", "delivered",
-            "tracking", "track", "package", "parcel",
-            "order not delivered", "not delivered",
-            "late order", "delivery delayed",
-            "order not received", "not arrived",
-        ]),
-        ("Login", [
-            "login", "log in", "sign in", "password",
-            "locked out", "unable to log in",
-            "cannot log in", "forgot password",
-        ]),
-        ("Billing", [
-            "billing", "payment", "charged", "charge",
-            "deducted", "invoice", "duplicate transaction",
-            "double payment",
-        ]),
-        ("Account", [
-            "account details", "account settings", "profile",
-            "change email", "update email", "delete account",
-            "account closure",
-        ]),
-        ("Technical", [
-            "error", "crash", "bug", "not loading",
-            "application", "technical issue", "website down",
-        ]),
+        (
+            "Refunds",
+            [
+                "refund",
+                "reimbursement",
+                "money back",
+                "refund not received",
+                "refund status",
+            ],
+        ),
+        (
+            "Shipping",
+            [
+                "shipping",
+                "shipment",
+                "delivery",
+                "delivered",
+                "tracking",
+                "track",
+                "package",
+                "parcel",
+                "order not delivered",
+                "not delivered",
+                "late order",
+                "delivery delayed",
+                "order not received",
+                "not arrived",
+            ],
+        ),
+        (
+            "Login",
+            [
+                "login",
+                "log in",
+                "sign in",
+                "password",
+                "locked out",
+                "unable to log in",
+                "cannot log in",
+                "forgot password",
+            ],
+        ),
+        (
+            "Billing",
+            [
+                "billing",
+                "payment",
+                "charged",
+                "charge",
+                "deducted",
+                "invoice",
+                "duplicate transaction",
+                "double payment",
+            ],
+        ),
+        (
+            "Account",
+            [
+                "account details",
+                "account settings",
+                "profile",
+                "change email",
+                "update email",
+                "delete account",
+                "account closure",
+            ],
+        ),
+        (
+            "Technical",
+            [
+                "error",
+                "crash",
+                "bug",
+                "not loading",
+                "application",
+                "technical issue",
+                "website down",
+            ],
+        ),
     ]
 
     for category, keywords in rules:
@@ -181,14 +238,19 @@ def fallback_reply(category: str, subject: str, text: str) -> str:
 
     return replies.get(
         category,
-        "Thank you for contacting support. Our support team will review your issue.",
+        "Thank you for contacting support. "
+        "Our support team will review your issue.",
     )
 
 
 def call_model(subject: str, text: str, articles: list[dict]) -> dict:
-    """Use local Ollama for priority and suggested reply generation."""
+    """Use Gemini to generate ticket priority and suggested reply."""
 
     category = fallback_category(subject, text)
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured.")
 
     article_context = [
         {
@@ -226,62 +288,45 @@ If no article is relevant, return an empty article_ids list.
 Return JSON only, without Markdown.
 
 Subject: {subject}
+
 Description: {text}
 
 Available articles:
 {json.dumps(article_context, ensure_ascii=False)}
 """
 
-    payload = {
-        "model": os.getenv("OLLAMA_MODEL", "llama3.2:1b"),
-        "prompt": prompt,
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0},
-    }
-
-    base_url = os.getenv(
-        "OLLAMA_BASE_URL",
-        "http://127.0.0.1:11434",
-    ).rstrip("/")
-
-    request = Request(
-        url=f"{base_url}/api/generate",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
     try:
-        with urlopen(request, timeout=120) as response:
-            response_data = json.loads(
-                response.read().decode("utf-8")
-            )
-    except HTTPError as exc:
-        raise RuntimeError(
-            f"Ollama returned HTTP {exc.code}."
-        ) from exc
-    except (URLError, TimeoutError) as exc:
-        raise RuntimeError(
-            "Cannot connect to Ollama. Ensure Ollama is running."
-        ) from exc
+        client = genai.Client(api_key=api_key)
 
-    content = response_data.get("response")
+        response = client.models.generate_content(
+            model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0,
+            ),
+        )
 
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("The local AI model returned an empty response.")
+        content = response.text
 
-    try:
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("Gemini returned an empty response.")
+
         result = json.loads(content)
+
+        if not isinstance(result, dict):
+            raise RuntimeError("Gemini returned an invalid JSON object.")
+
+        return result
+
+    except RuntimeError:
+        raise
     except json.JSONDecodeError as exc:
+        raise RuntimeError("Gemini returned invalid JSON.") from exc
+    except Exception as exc:
         raise RuntimeError(
-            "The local AI model returned invalid JSON."
+            f"Gemini API request failed ({type(exc).__name__})."
         ) from exc
-
-    if not isinstance(result, dict):
-        raise RuntimeError("The local AI model returned an invalid JSON object.")
-
-    return result
 
 
 def triage_ticket(subject: str, text: str) -> TriageResult:
@@ -302,7 +347,8 @@ def triage_ticket(subject: str, text: str) -> TriageResult:
     allowed_ids = {
         article["id"]
         for article in articles
-        if isinstance(article, dict) and isinstance(article.get("id"), str)
+        if isinstance(article, dict)
+        and isinstance(article.get("id"), str)
     }
 
     # Prefer articles associated with the ticket category.
@@ -323,8 +369,7 @@ def triage_ticket(subject: str, text: str) -> TriageResult:
             and isinstance(article.get("id"), str)
         ]
 
-    # Try the local model. Use a safe category-specific reply if its
-    # response is missing or generic.
+    # Call Gemini to generate priority and a suggested reply.
     result = call_model(subject, text, articles)
 
     priority = determine_priority(
@@ -334,13 +379,21 @@ def triage_ticket(subject: str, text: str) -> TriageResult:
     )
 
     model_reply = result.get("suggested_reply", "")
+
     generic_replies = {
         "please contact us so we can assist you further",
-        "we apologize for the inconvenience please contact us so we can assist you further",
+        (
+            "we apologize for the inconvenience please contact us "
+            "so we can assist you further"
+        ),
         "thank you for contacting support",
     }
 
-    normalized_reply = normalize(model_reply) if isinstance(model_reply, str) else ""
+    normalized_reply = (
+        normalize(model_reply)
+        if isinstance(model_reply, str)
+        else ""
+    )
 
     if (
         not isinstance(model_reply, str)
@@ -357,4 +410,3 @@ def triage_ticket(subject: str, text: str) -> TriageResult:
     }
 
     return TriageResult.model_validate(final_result)
-
