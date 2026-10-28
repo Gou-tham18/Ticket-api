@@ -37,6 +37,7 @@ app = FastAPI(title="ticket-api")
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://192.168.1.11:5173",  # Added frontend origin
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://localhost:4173",
@@ -154,5 +155,4 @@ app.mount(
     StaticFiles(directory=str(WEB_DIR), html=True),
     name="web",
 )
-
 
