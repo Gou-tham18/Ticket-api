@@ -73,6 +73,20 @@ def test_unknown_ticket_is_404():
     assert response.status_code == 404
 
 
+def test_cors_allows_frontend_opened_by_lan_address():
+    origin = "http://192.168.1.5:5173"
+    response = client.get("/summary", headers={"Origin": origin})
+
+    assert response.headers.get("access-control-allow-origin") == origin
+
+
+def test_cors_rejects_unknown_origins():
+    for origin in ("http://evil.example.com:5173", "http://192.168.1.5:8080"):
+        response = client.get("/summary", headers={"Origin": origin})
+
+        assert "access-control-allow-origin" not in response.headers
+
+
 def test_summary_uses_day1_summary_module(monkeypatch):
     import app.main as main_module
 
