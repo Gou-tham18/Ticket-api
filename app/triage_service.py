@@ -25,6 +25,10 @@ CATEGORY_ARTICLES = {
 }
 
 
+class GeminiConfigurationError(RuntimeError):
+    """Raised when the server is missing required Gemini settings."""
+
+
 class TriageRequest(BaseModel):
     subject: str = Field(min_length=1, max_length=500)
     text: str = Field(min_length=1, max_length=10000)
@@ -170,9 +174,14 @@ def call_model(subject: str, text: str, articles: list[dict]) -> dict:
     """Use Gemini to generate ticket priority and suggested reply."""
     category = fallback_category(subject, text)
 
-    api_key = os.getenv("GEMINI_API_KEY")
+    # A missing key is a configuration problem, not a temporary outage,
+    # so it is reported instead of being hidden by the fallback below.
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is not configured.")
+        raise GeminiConfigurationError(
+            "GEMINI_API_KEY is not set. Add it to the backend .env file "
+            "or the Render service environment, then restart the backend."
+        )
 
     article_context = [
         {

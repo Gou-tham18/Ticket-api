@@ -4,31 +4,37 @@ A small FastAPI service that provides support ticket data, ticket summaries, an 
 
 ## Requirements
 
-- Python 3.8 or newer
+- Python 3.9 or newer (tested on Python 3.13)
 - pip
 - Node.js 18+ (tested on Node.js 24)
 - npm 9+ (tested on npm 11)
 
-## AI Model Setup (Ollama)
+## AI Model Setup (Google Gemini)
 
-The ticket triage service uses the local Ollama model `llama3.2:1b`. No paid AI API key is required.
+The ticket triage service calls Google Gemini through the `google-genai` Python package. You need a Gemini API key from https://aistudio.google.com/apikey.
 
-1. Install Ollama from https://ollama.com/download.
-2. Open PowerShell and download the model:
+The backend reads these environment variables (from the project-root `.env` file locally, or from the Render service environment when deployed):
 
-   ```powershell
-   ollama pull llama3.2:1b
-   ```
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `GEMINI_API_KEY` | Yes | none | Gemini API key used by `/triage` |
+| `GEMINI_MODEL` | No | `gemini-3.8-flash` | Gemini model ID |
+| `TICKETS_DATA_PATH` | No | `data/tickets_sample.csv` | Ticket CSV used by `/tickets` and `/summary` |
 
-3. Verify that the model is available:
+Create the backend `.env` file from the template and add your key:
 
-   ```powershell
-   ollama list
-   ```
+```powershell
+Copy-Item .env.example .env
+# then edit .env and set GEMINI_API_KEY=<your key>
+```
 
-4. Ensure Ollama is running and its local API is accessible at `http://localhost:11434`.
+Never commit `.env`; it is ignored by Git.
 
-Keep Ollama running while using the ticket triage feature. If the model is unavailable, the AI triage request may fail or return a service error.
+How `/triage` behaves when Gemini cannot be used:
+
+- **`GEMINI_API_KEY` not set:** the API returns HTTP `503` with a message naming the missing setting. This is a configuration error and is not hidden.
+- **Gemini temporarily unavailable** (for example, HTTP 503 "model overloaded", a timeout, or an unreadable response): the API still returns HTTP `200` with a valid result. It uses the keyword-based category, priority `normal` (unless the ticket matches a built-in urgent or high phrase), a category-specific template reply, and the retrieved article IDs. The backend log shows `Gemini unavailable; using fallback triage`.
+- **Any other unexpected error:** the API returns HTTP `502` with `Ticket triage service failed.`
 
 
 ## Project structure
@@ -68,7 +74,9 @@ Install the dependencies:
 python -m pip install -r requirements.txt
 ```
 
-Set the path to the sample CSV:
+Create `.env` with your `GEMINI_API_KEY` as described in [AI Model Setup](#ai-model-setup-google-gemini).
+
+Optionally set the path to the ticket CSV (it defaults to `data/tickets_sample.csv`):
 
 ```powershell
 $env:TICKETS_DATA_PATH = ".\data\tickets_sample.csv"
@@ -128,7 +136,7 @@ $env:TICKETS_DATA_PATH = ".\data\tickets_sample.csv"
 python -m pytest -q
 ```
 
-All 15 tests validate summary calculations, pagination, missing-ticket behavior, retrieval logic, and ticket triage handling.
+All 18 tests validate summary calculations, pagination, missing-ticket behavior, retrieval logic, and ticket triage handling, including the missing-API-key error and the fallback used when Gemini is unavailable. Gemini is mocked, so no API key or network access is needed to run them.
 
 ---
 
@@ -161,7 +169,7 @@ The frontend uses Vite environment variables to locate the backend API:
   ```powershell
   Copy-Item .env.example .env
   ```
-- By default, `VITE_API_BASE_URL` is set to `http://127.0.0.1:8000`.
+- `.env.example` points `VITE_API_BASE_URL` at the deployed backend (`https://task4-ticket-triage-api.onrender.com`). To use a local backend, set it to `http://127.0.0.1:8000` in `frontend/.env`. If the variable is unset, the frontend falls back to `http://127.0.0.1:8000`.
 - Do not store API keys or secrets in frontend environment variables. All AI model keys remain securely on the backend server.
 
 ### Start the Frontend Development Server
@@ -229,13 +237,41 @@ This generates production-ready static assets in `frontend/dist/`.
 ### Troubleshooting
 
 - **CORS Issues (`Access to fetch at ... blocked by CORS policy`)**:
-  FastAPI has CORS middleware configured in `app/main.py` allowing `http://localhost:5173` and `http://127.0.0.1:5173`. Ensure your browser URL matches one of the allowed origins.
+  FastAPI has CORS middleware configured in `app/main.py` (`ALLOWED_ORIGINS`) allowing the local Vite ports (5173, 4173, 3000) on `localhost` and `127.0.0.1`, and the deployed frontend `https://ticket-api-kr58.onrender.com`. Ensure your browser URL matches one of the allowed origins.
+- **Triage returns "not configured" (HTTP 503)**:
+  `GEMINI_API_KEY` is missing. Add it to the project-root `.env` (or the Render backend's environment) and restart the backend.
 - **Backend Connection Failure (`Unable to connect to the backend server`)**:
   Verify the backend terminal is running `python -m uvicorn app.main:app --reload` on port 8000 and `$env:TICKETS_DATA_PATH` is set.
 - **Incorrect API URL**:
   Check `frontend/.env` and verify `VITE_API_BASE_URL` points to your backend instance (e.g. `http://127.0.0.1:8000`). Restart `npm run dev` after changing `.env`.
 - **Port Conflict**:
   If port 8000 or 5173 is already in use, stop conflicting processes or specify an alternate port. Remember to update `VITE_API_BASE_URL` if you change the backend port.
+
+---
+
+## Deployment (Render)
+
+| Service | Render type | URL |
+|---|---|---|
+| Backend (FastAPI) | Web service | https://task4-ticket-triage-api.onrender.com |
+| Frontend (React) | Static site | https://ticket-api-kr58.onrender.com |
+
+The settings below are the typical values for this project; check them against the Render dashboard.
+
+Backend:
+
+- Build command: `pip install -r requirements.txt`
+- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Environment: set `GEMINI_API_KEY` (and optionally `GEMINI_MODEL`) in the service's Environment settings.
+
+Frontend:
+
+- Root directory: `frontend`
+- Build command: `npm install && npm run build`
+- Publish directory: `dist`
+- Environment: `VITE_API_BASE_URL=https://task4-ticket-triage-api.onrender.com`. This value is compiled in at build time, so redeploy after changing it.
+
+If the frontend URL changes, add the new origin to `ALLOWED_ORIGINS` in `app/main.py`.
 
 ---
 

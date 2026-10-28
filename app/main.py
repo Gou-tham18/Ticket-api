@@ -11,7 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.ticket_summary import process_tickets_file
-from app.triage_service import TriageRequest, triage_ticket
+from app.triage_service import (
+    GeminiConfigurationError,
+    TriageRequest,
+    triage_ticket,
+)
 
 
 # Project paths and environment configuration
@@ -133,6 +137,14 @@ def triage(request: TriageRequest):
             request.text.strip(),
         )
         return result.model_dump()
+
+    except GeminiConfigurationError as exc:
+        # The message names the missing setting and contains no secrets.
+        logger.error("Ticket triage is not configured: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Ticket triage is not configured: {exc}",
+        ) from None
 
     except Exception as exc:
         # Print the exception type and message for easy diagnosis.
