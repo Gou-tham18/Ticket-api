@@ -1,4 +1,4 @@
-
+   
 import json
 import os
 import re
@@ -12,16 +12,9 @@ from app.retrieval import retrieve_articles
 
 
 ALLOWED_CATEGORIES = {
-    "Billing",
-    "Login",
-    "Shipping",
-    "Refunds",
-    "Technical",
-    "Account",
+    "Billing", "Login", "Shipping", "Refunds", "Technical", "Account"
 }
-
 ALLOWED_PRIORITIES = {"urgent", "high", "normal", "low"}
-
 CATEGORY_ARTICLES = {
     "Billing": ["KB-003"],
     "Login": ["KB-001"],
@@ -46,12 +39,7 @@ class TriageRequest(BaseModel):
 
 class TriageResult(BaseModel):
     category: Literal[
-        "Billing",
-        "Login",
-        "Shipping",
-        "Refunds",
-        "Technical",
-        "Account",
+        "Billing", "Login", "Shipping", "Refunds", "Technical", "Account"
     ]
     priority: Literal["urgent", "high", "normal", "low"]
     suggested_reply: str
@@ -66,89 +54,36 @@ def normalize(text: str) -> str:
 
 def fallback_category(subject: str, text: str) -> str:
     """Classify tickets using keyword rules."""
-
     ticket = normalize(f"{subject} {text}")
 
     rules = [
-        (
-            "Refunds",
-            [
-                "refund",
-                "reimbursement",
-                "money back",
-                "refund not received",
-                "refund status",
-            ],
-        ),
-        (
-            "Shipping",
-            [
-                "shipping",
-                "shipment",
-                "delivery",
-                "delivered",
-                "tracking",
-                "track",
-                "package",
-                "parcel",
-                "order not delivered",
-                "not delivered",
-                "late order",
-                "delivery delayed",
-                "order not received",
-                "not arrived",
-            ],
-        ),
-        (
-            "Login",
-            [
-                "login",
-                "log in",
-                "sign in",
-                "password",
-                "locked out",
-                "unable to log in",
-                "cannot log in",
-                "forgot password",
-            ],
-        ),
-        (
-            "Billing",
-            [
-                "billing",
-                "payment",
-                "charged",
-                "charge",
-                "deducted",
-                "invoice",
-                "duplicate transaction",
-                "double payment",
-            ],
-        ),
-        (
-            "Account",
-            [
-                "account details",
-                "account settings",
-                "profile",
-                "change email",
-                "update email",
-                "delete account",
-                "account closure",
-            ],
-        ),
-        (
-            "Technical",
-            [
-                "error",
-                "crash",
-                "bug",
-                "not loading",
-                "application",
-                "technical issue",
-                "website down",
-            ],
-        ),
+        ("Refunds", [
+            "refund", "reimbursement", "money back",
+            "refund not received", "refund status",
+        ]),
+        ("Shipping", [
+            "shipping", "shipment", "delivery", "delivered",
+            "tracking", "track", "package", "parcel",
+            "order not delivered", "not delivered", "late order",
+            "delivery delayed", "order not received", "not arrived",
+        ]),
+        ("Login", [
+            "login", "log in", "sign in", "password", "locked out",
+            "unable to log in", "cannot log in", "forgot password",
+        ]),
+        ("Billing", [
+            "billing", "payment", "charged", "charge", "deducted",
+            "invoice", "duplicate transaction", "double payment",
+        ]),
+        ("Account", [
+            "account details", "account settings", "profile",
+            "change email", "update email", "delete account",
+            "account closure",
+        ]),
+        ("Technical", [
+            "error", "crash", "bug", "not loading", "application",
+            "technical issue", "website down",
+        ]),
     ]
 
     for category, keywords in rules:
@@ -160,28 +95,17 @@ def fallback_category(subject: str, text: str) -> str:
 
 def determine_priority(subject: str, text: str, model_priority) -> str:
     """Apply conservative priority rules to the model's suggestion."""
-
     ticket = normalize(f"{subject} {text}")
 
     urgent_phrases = [
-        "account compromised",
-        "account hacked",
-        "unauthorized access",
-        "security breach",
-        "entire website down",
-        "all users affected",
-        "business operations stopped",
-        "critical system outage",
+        "account compromised", "account hacked", "unauthorized access",
+        "security breach", "entire website down", "all users affected",
+        "business operations stopped", "critical system outage",
     ]
-
     high_phrases = [
-        "cannot complete payment",
-        "payment failed",
-        "unable to access account",
-        "business affected",
-        "time sensitive",
-        "delivery deadline",
-        "urgent assistance",
+        "cannot complete payment", "payment failed",
+        "unable to access account", "business affected",
+        "time sensitive", "delivery deadline", "urgent assistance",
     ]
 
     if any(phrase in ticket for phrase in urgent_phrases):
@@ -202,7 +126,6 @@ def determine_priority(subject: str, text: str, model_priority) -> str:
 
 def fallback_reply(category: str, subject: str, text: str) -> str:
     """Generate a category-specific reply without inventing policies."""
-
     replies = {
         "Billing": (
             "We understand your concern about the payment. "
@@ -245,7 +168,6 @@ def fallback_reply(category: str, subject: str, text: str) -> str:
 
 def call_model(subject: str, text: str, articles: list[dict]) -> dict:
     """Use Gemini to generate ticket priority and suggested reply."""
-
     category = fallback_category(subject, text)
 
     api_key = os.getenv("GEMINI_API_KEY")
@@ -297,7 +219,6 @@ Available articles:
 
     try:
         client = genai.Client(api_key=api_key)
-
         response = client.models.generate_content(
             model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
             contents=prompt,
@@ -308,30 +229,30 @@ Available articles:
         )
 
         content = response.text
-
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("Gemini returned an empty response.")
 
         result = json.loads(content)
-
         if not isinstance(result, dict):
             raise RuntimeError("Gemini returned an invalid JSON object.")
 
         return result
 
-    except RuntimeError:
-        raise
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Gemini returned invalid JSON.") from exc
     except Exception as exc:
-        raise RuntimeError(
-            f"Gemini API request failed ({type(exc).__name__})."
-        ) from exc
+        print(
+            "Gemini unavailable; using fallback triage: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return {
+            "category": category,
+            "priority": "normal",
+            "suggested_reply": fallback_reply(category, subject, text),
+            "article_ids": [],
+        }
 
 
 def triage_ticket(subject: str, text: str) -> TriageResult:
     """Validate input, classify, retrieve articles, and build the result."""
-
     request_data = TriageRequest(
         subject=subject.strip(),
         text=text.strip(),
@@ -359,8 +280,7 @@ def triage_ticket(subject: str, text: str) -> TriageResult:
         if article_id in allowed_ids
     ]
 
-    # If the preferred category article was not retrieved, use the
-    # relevant articles returned by the retrieval function.
+    # Otherwise, use the relevant articles returned by retrieval.
     if not selected_ids:
         selected_ids = [
             article["id"]
@@ -369,7 +289,6 @@ def triage_ticket(subject: str, text: str) -> TriageResult:
             and isinstance(article.get("id"), str)
         ]
 
-    # Call Gemini to generate priority and a suggested reply.
     result = call_model(subject, text, articles)
 
     priority = determine_priority(
@@ -379,7 +298,6 @@ def triage_ticket(subject: str, text: str) -> TriageResult:
     )
 
     model_reply = result.get("suggested_reply", "")
-
     generic_replies = {
         "please contact us so we can assist you further",
         (
@@ -390,9 +308,7 @@ def triage_ticket(subject: str, text: str) -> TriageResult:
     }
 
     normalized_reply = (
-        normalize(model_reply)
-        if isinstance(model_reply, str)
-        else ""
+        normalize(model_reply) if isinstance(model_reply, str) else ""
     )
 
     if (
