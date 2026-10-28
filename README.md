@@ -9,53 +9,47 @@ A small FastAPI service that provides support ticket data, ticket summaries, an 
 - Node.js 18+ (tested on Node.js 24)
 - npm 9+ (tested on npm 11)
 
+## AI Model Setup (Ollama)
+
+The ticket triage service uses the local Ollama model `llama3.2:1b`. No paid AI API key is required.
+
+1. Install Ollama from https://ollama.com/download.
+2. Open PowerShell and download the model:
+
+   ```powershell
+   ollama pull llama3.2:1b
+   ```
+
+3. Verify that the model is available:
+
+   ```powershell
+   ollama list
+   ```
+
+4. Ensure Ollama is running and its local API is accessible at `http://localhost:11434`.
+
+Keep Ollama running while using the ticket triage feature. If the model is unavailable, the AI triage request may fail or return a service error.
+
+
 ## Project structure
 
-```text
 task3/
-├── app/
-│   ├── main.py
-│   ├── retrieval.py
-│   ├── ticket_summary.py
-│   └── triage_service.py
-├── data/
-│   └── tickets_sample.csv
-├── docs/
-│   └── ROOT_CAUSE.md
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── LoadingIndicator.tsx
-│   │   │   ├── TicketForm.tsx
-│   │   │   └── TriageResult.tsx
-│   │   ├── services/
-│   │   │   └── triageApi.ts
-│   │   ├── types/
-│   │   │   └── triage.ts
-│   │   ├── App.css
-│   │   ├── App.test.tsx
-│   │   ├── App.tsx
-│   │   ├── index.css
-│   │   ├── main.tsx
-│   │   ├── setupTests.ts
-│   │   └── vite-env.d.ts
-│   ├── .env.example
-│   ├── index.html
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── tsconfig.node.json
-│   └── vite.config.ts
-├── kb/
-├── tests/
-│   ├── test_api.py
-│   ├── test_retrieval.py
-│   └── test_triage.py
-├── web/
-│   └── index.html
-├── pytest.ini
-├── requirements.txt
-└── README.md
-```
+|-- app/
+|   |-- main.py
+|   |-- retrieval.py
+|   |-- ticket_summary.py
+|   `-- triage_service.py
+|-- data/
+|   `-- tickets_sample.csv
+|-- docs/
+|   `-- ROOT_CAUSE.md
+|-- frontend/
+|   `-- React + TypeScript application
+|-- kb/
+|-- tests/
+|-- pytest.ini
+|-- requirements.txt
+`-- README.md
 
 ## Setup & Run Backend
 
