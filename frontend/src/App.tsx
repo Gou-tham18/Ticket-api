@@ -3,13 +3,15 @@ import { TicketForm } from './components/TicketForm';
 import { LoadingIndicator } from './components/LoadingIndicator';
 import { TriageResult } from './components/TriageResult';
 import { EscalationTracker } from './components/EscalationTracker';
+import { EscalationDashboard } from './components/EscalationDashboard';
 import { submitTriage, ApiError } from './services/triageApi';
 import { TriageRequest, TriageResult as TriageResultType } from './types/triage';
 import './App.css';
 
-type View = 'triage' | 'escalations';
+type View = 'triage' | 'escalations' | 'dashboard';
 
 const ESCALATIONS_HASH = '#/escalations';
+const DASHBOARD_HASH = '#/dashboard';
 
 const VIEWS: Record<View, { title: string; description: string; footer: string; href: string }> = {
   triage: {
@@ -28,10 +30,21 @@ const VIEWS: Record<View, { title: string; description: string; footer: string; 
     footer: 'Escalation Tracker • Task 5',
     href: ESCALATIONS_HASH,
   },
+  dashboard: {
+    title: 'Escalation Dashboard',
+    description:
+      'Send the urgent open tickets that need a decision to the manager in one email, then paste ' +
+      'their reply to record the approvals.',
+    footer: 'Escalation Dashboard • Task 5',
+    href: DASHBOARD_HASH,
+  },
 };
 
 function viewFromHash(hash: string): View {
-  return hash === ESCALATIONS_HASH ? 'escalations' : 'triage';
+  if (hash === ESCALATIONS_HASH) {
+    return 'escalations';
+  }
+  return hash === DASHBOARD_HASH ? 'dashboard' : 'triage';
 }
 
 export function App() {
@@ -50,7 +63,7 @@ export function App() {
   const current = VIEWS[view];
 
   return (
-    <div className={`app-container ${view === 'escalations' ? 'app-container-wide' : ''}`}>
+    <div className={`app-container ${view !== 'triage' ? 'app-container-wide' : ''}`}>
       <nav className="app-nav" aria-label="Main">
         {(Object.keys(VIEWS) as View[]).map((key) => (
           <a
@@ -72,7 +85,9 @@ export function App() {
       </header>
 
       <main className="app-main">
-        {view === 'triage' ? <TriageView /> : <EscalationTracker />}
+        {view === 'triage' && <TriageView />}
+        {view === 'escalations' && <EscalationTracker />}
+        {view === 'dashboard' && <EscalationDashboard />}
       </main>
 
       <footer className="app-footer">

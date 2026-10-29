@@ -5,8 +5,9 @@ import re
 from typing import Literal
 
 from google import genai
-from google.genai import types
-from pydantic import BaseModel, Field, field_validator
+from google.genai import errors, types
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic_core import PydanticCustomError
 
 from app.retrieval import retrieve_articles
 
@@ -15,6 +16,8 @@ ALLOWED_CATEGORIES = {
     "Billing", "Login", "Shipping", "Refunds", "Technical", "Account"
 }
 ALLOWED_PRIORITIES = {"urgent", "high", "normal", "low"}
+# Gemini errors caused by settings: invalid key, no permission, unknown model.
+CONFIGURATION_ERROR_CODES = {400, 401, 403, 404}
 CATEGORY_ARTICLES = {
     "Billing": ["KB-003"],
     "Login": ["KB-001"],
@@ -30,14 +33,15 @@ class GeminiConfigurationError(RuntimeError):
 
 
 class TriageRequest(BaseModel):
-    subject: str = Field(min_length=1, max_length=500)
-    text: str = Field(min_length=1, max_length=10000)
+    subject: str = Field(max_length=500)
+    text: str = Field(max_length=10000)
 
     @field_validator("subject", "text")
     @classmethod
-    def reject_blank_text(cls, value: str) -> str:
+    def reject_blank_text(cls, value: str, info: ValidationInfo) -> str:
         if not value.strip():
-            raise ValueError("This field must not be blank.")
+            # "plain": shown to the user as-is by the API's validation handler.
+            raise PydanticCustomError("plain", f"{info.field_name} must not be blank.")
         return value
 
 
@@ -97,7 +101,9 @@ def fallback_category(subject: str, text: str) -> str:
     return "Technical"
 
 
-def determine_priority(subject: str, text: str, model_priority) -> str:
+def determine_priority(
+    subject: str, text: str, model_priority, category: str = ""
+) -> str:
     """Apply conservative priority rules to the model's suggestion."""
     ticket = normalize(f"{subject} {text}")
 
@@ -122,7 +128,7 @@ def determine_priority(subject: str, text: str, model_priority) -> str:
         return "normal"
 
     # A routine delivery delay alone should not become urgent.
-    if model_priority == "urgent":
+    if model_priority == "urgent" and category == "Shipping":
         return "normal"
 
     return model_priority
@@ -247,17 +253,33 @@ Available articles:
 
         return result
 
+    except errors.ClientError as exc:
+        # A bad key or an unknown model name will not fix itself, so report
+        # it instead of hiding it behind the fallback. Rate limits (429) are
+        # temporary and still use the fallback below.
+        if exc.code in CONFIGURATION_ERROR_CODES:
+            raise GeminiConfigurationError(
+                f"Gemini rejected the request ({exc.code} {exc.status}). "
+                "Check GEMINI_API_KEY and GEMINI_MODEL, then restart the backend."
+            ) from None
+        return _fallback_result(category, subject, text, exc)
+
     except Exception as exc:
-        print(
-            "Gemini unavailable; using fallback triage: "
-            f"{type(exc).__name__}: {exc}"
-        )
-        return {
-            "category": category,
-            "priority": "normal",
-            "suggested_reply": fallback_reply(category, subject, text),
-            "article_ids": [],
-        }
+        return _fallback_result(category, subject, text, exc)
+
+
+def _fallback_result(category: str, subject: str, text: str, exc: Exception) -> dict:
+    """Rule-based result used while Gemini is temporarily unavailable."""
+    print(
+        "Gemini unavailable; using fallback triage: "
+        f"{type(exc).__name__}: {exc}"
+    )
+    return {
+        "category": category,
+        "priority": "normal",
+        "suggested_reply": fallback_reply(category, subject, text),
+        "article_ids": [],
+    }
 
 
 def triage_ticket(subject: str, text: str) -> TriageResult:
@@ -304,6 +326,7 @@ def triage_ticket(subject: str, text: str) -> TriageResult:
         subject,
         text,
         result.get("priority"),
+        category,
     )
 
     model_reply = result.get("suggested_reply", "")

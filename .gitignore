@@ -12,3 +12,6 @@ frontend/dist/
 ticket.zip/
 
 /task4 material/
+
+data/decision_log.csv
+data/approval_requests.csv

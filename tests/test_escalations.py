@@ -369,24 +369,24 @@ def urgent_service(tmp_path):
         tmp_path / "export.csv",
         EXPORT_HEADER
         # urgent, open, no escalation at all -> not_requested
-        + "U-1,2026-10-05 08:00,Billing,urgent,open,a@x.com,riya,,\n"
+        + "TCK-9001,2026-10-05 08:00,Billing,urgent,open,a@x.com,riya,,\n"
         # urgent, in_progress, tagged but no tracker row -> not_requested
-        + "U-2,2026-10-05 09:00,Shipping,urgent,in_progress,b@x.com,sam,esc,\n"
+        + "TCK-9002,2026-10-05 09:00,Shipping,urgent,in_progress,b@x.com,sam,esc,\n"
         # urgent, open, in tracker without decision -> awaiting_decision
-        + "U-3,2026-10-05 10:00,Billing,urgent,open,c@x.com,ken,escalated,\n"
+        + "TCK-9003,2026-10-05 10:00,Billing,urgent,open,c@x.com,ken,escalated,\n"
         # urgent, open, accepted
-        + "U-4,2026-10-05 11:00,Refunds,urgent,open,d@x.com,lia,escalated,\n"
+        + "TCK-9004,2026-10-05 11:00,Refunds,urgent,open,d@x.com,lia,escalated,\n"
         # urgent but resolved -> excluded
-        + "U-5,2026-10-05 12:00,Billing,urgent,resolved,e@x.com,tom,escalated,\n"
+        + "TCK-9005,2026-10-05 12:00,Billing,urgent,resolved,e@x.com,tom,escalated,\n"
         # open but not urgent -> excluded
-        + "U-6,2026-10-05 13:00,Billing,high,open,f@x.com,zoe,,\n",
+        + "TCK-9006,2026-10-05 13:00,Billing,high,open,f@x.com,zoe,,\n",
     )
     tracker = write(
         tmp_path / "tracker.csv",
         TRACKER_HEADER
-        + "U-3,Riya,Anil,2026-10-06 06:00,,,\n"
-        + "U-4,Lia,Joyce,2026-10-05 12:00,approved,2026-10-05 13:00,\n"
-        + "U-5,Tom,Joyce,2026-10-05 13:00,,,\n",
+        + "TCK-9003,Riya,Anil,2026-10-06 06:00,,,\n"
+        + "TCK-9004,Lia,Joyce,2026-10-05 12:00,approved,2026-10-05 13:00,\n"
+        + "TCK-9005,Tom,Joyce,2026-10-05 13:00,,,\n",
     )
     return EscalationService(
         export, tracker, tmp_path / "decisions.csv", clock=lambda: URGENT_NOW
@@ -403,7 +403,7 @@ def urgent_client(urgent_service):
 def test_analysis_includes_only_urgent_open_tickets(urgent_service):
     result = urgent_service.urgent_open_analysis()
 
-    assert {t["ticket_id"] for t in result["tickets"]} == {"U-1", "U-2", "U-3", "U-4"}
+    assert {t["ticket_id"] for t in result["tickets"]} == {"TCK-9001", "TCK-9002", "TCK-9003", "TCK-9004"}
     assert result["total"] == 4
 
 
@@ -412,10 +412,10 @@ def test_analysis_groups_by_approval_stage(urgent_service):
     stages = {t["ticket_id"]: t["approval_stage"] for t in result["tickets"]}
 
     assert stages == {
-        "U-1": "not_requested",
-        "U-2": "not_requested",
-        "U-3": "awaiting_decision",
-        "U-4": "accepted",
+        "TCK-9001": "not_requested",
+        "TCK-9002": "not_requested",
+        "TCK-9003": "awaiting_decision",
+        "TCK-9004": "accepted",
     }
     assert result["by_stage"] == {
         "not_requested": 2,
@@ -429,23 +429,23 @@ def test_analysis_groups_by_approval_stage(urgent_service):
 def test_analysis_lists_tickets_needing_action_first_oldest_first(urgent_service):
     order = [t["ticket_id"] for t in urgent_service.urgent_open_analysis()["tickets"]]
 
-    assert order == ["U-1", "U-2", "U-3", "U-4"]
+    assert order == ["TCK-9001", "TCK-9002", "TCK-9003", "TCK-9004"]
 
 
 def test_analysis_reports_ages(urgent_service):
     tickets = {t["ticket_id"]: t for t in urgent_service.urgent_open_analysis()["tickets"]}
 
-    assert tickets["U-1"]["age_hours"] == 28.0
-    assert tickets["U-3"]["waiting_for_decision_hours"] == 6.0
-    assert tickets["U-4"]["waiting_for_decision_hours"] is None
+    assert tickets["TCK-9001"]["age_hours"] == 28.0
+    assert tickets["TCK-9003"]["waiting_for_decision_hours"] == 6.0
+    assert tickets["TCK-9004"]["waiting_for_decision_hours"] is None
 
 
 def test_analysis_filters(urgent_service):
     billing = urgent_service.urgent_open_analysis(category="billing")
     in_progress = urgent_service.urgent_open_analysis(status="in_progress")
 
-    assert {t["ticket_id"] for t in billing["tickets"]} == {"U-1", "U-3"}
-    assert {t["ticket_id"] for t in in_progress["tickets"]} == {"U-2"}
+    assert {t["ticket_id"] for t in billing["tickets"]} == {"TCK-9001", "TCK-9003"}
+    assert {t["ticket_id"] for t in in_progress["tickets"]} == {"TCK-9002"}
 
 
 def test_managers_default_to_tracker_approvers(urgent_service):
@@ -453,10 +453,10 @@ def test_managers_default_to_tracker_approvers(urgent_service):
 
 
 def test_request_approval_moves_ticket_to_awaiting_decision(urgent_service):
-    urgent_service.request_approval("U-1", "Riya", "joyce")
+    urgent_service.request_approval("TCK-9001", "Riya", "joyce")
 
     ticket = next(
-        t for t in urgent_service.urgent_open_analysis()["tickets"] if t["ticket_id"] == "U-1"
+        t for t in urgent_service.urgent_open_analysis()["tickets"] if t["ticket_id"] == "TCK-9001"
     )
     assert ticket["approval_stage"] == "awaiting_decision"
     assert ticket["escalation"]["approver"] == "Joyce"
@@ -465,14 +465,14 @@ def test_request_approval_moves_ticket_to_awaiting_decision(urgent_service):
 
 
 def test_requested_ticket_can_then_be_decided(urgent_service):
-    urgent_service.request_approval("U-1", "Riya", "Anil")
-    view = urgent_service.record_decision("U-1", "Accept", "Anil")
+    urgent_service.request_approval("TCK-9001", "Riya", "Anil")
+    view = urgent_service.record_decision("TCK-9001", "Accept", "Anil")
 
     assert view["escalation"]["state"] == "accepted"
 
 
 def test_approval_requests_survive_a_restart(urgent_service):
-    urgent_service.request_approval("U-2", "Sam", "Anil")
+    urgent_service.request_approval("TCK-9002", "Sam", "Anil")
 
     reloaded = EscalationService(
         urgent_service.export_path,
@@ -480,18 +480,18 @@ def test_approval_requests_survive_a_restart(urgent_service):
         urgent_service.decision_log_path,
     )
 
-    assert reloaded.ticket_view("U-2")["escalation"]["approver"] == "Anil"
+    assert reloaded.ticket_view("TCK-9002")["escalation"]["approver"] == "Anil"
 
 
 def test_request_approval_rules(urgent_service):
     with pytest.raises(UnknownManager):
-        urgent_service.request_approval("U-1", "Riya", "Mara")
+        urgent_service.request_approval("TCK-9001", "Riya", "Mara")
     with pytest.raises(AlreadyRequested):
-        urgent_service.request_approval("U-3", "Riya", "Anil")
+        urgent_service.request_approval("TCK-9003", "Riya", "Anil")
     with pytest.raises(TicketNotFound):
-        urgent_service.request_approval("U-404", "Riya", "Anil")
+        urgent_service.request_approval("TCK-900404", "Riya", "Anil")
     with pytest.raises(ValueError):
-        urgent_service.request_approval("U-1", "  ", "Anil")
+        urgent_service.request_approval("TCK-9001", "  ", "Anil")
 
 
 def test_api_urgent_open_analysis(urgent_client):
@@ -510,12 +510,12 @@ def test_api_rejects_closed_status_filter(urgent_client):
 @pytest.mark.parametrize(
     "ticket_id, payload, status",
     [
-        ("U-1", {"requested_by": "Riya", "approver": "Anil"}, 200),
-        ("U-1", {"requested_by": "Riya", "approver": "Mara"}, 422),
-        ("U-1", {"requested_by": "   ", "approver": "Anil"}, 422),
-        ("U-1", {"requested_by": "Riya"}, 422),
-        ("U-3", {"requested_by": "Riya", "approver": "Anil"}, 409),
-        ("U-404", {"requested_by": "Riya", "approver": "Anil"}, 404),
+        ("TCK-9001", {"requested_by": "Riya", "approver": "Anil"}, 200),
+        ("TCK-9001", {"requested_by": "Riya", "approver": "Mara"}, 422),
+        ("TCK-9001", {"requested_by": "   ", "approver": "Anil"}, 422),
+        ("TCK-9001", {"requested_by": "Riya"}, 422),
+        ("TCK-9003", {"requested_by": "Riya", "approver": "Anil"}, 409),
+        ("TCK-900404", {"requested_by": "Riya", "approver": "Anil"}, 404),
     ],
 )
 def test_api_request_approval(urgent_client, ticket_id, payload, status):
@@ -537,3 +537,64 @@ def test_sample_urgent_open_analysis(sample_service):
     }
     assert {k for k, v in stages.items() if v == "not_requested"} == {"TCK-5070", "TCK-5110"}
     assert {k for k, v in stages.items() if v == "awaiting_decision"} == {"TCK-5007", "TCK-5050"}
+
+
+# Newer export format and hand-edited logs ----------------------------------
+
+
+def test_new_export_format_reads_labels_column(tmp_path):
+    export = write(
+        tmp_path / "export.csv",
+        "ticket_id,created_at,status,priority,category,assigned_to,"
+        "customer_email,labels,refund_amount\n"
+        "TCK-1,2026-10-05 13:05,open,urgent,Billing,riya,a@x.com,Escalated;vip,480\n"
+        "TCK-2,2026-10-05 14:00,open,normal,Login,sam,b@x.com,vip,\n",
+    )
+    tracker = write(tmp_path / "tracker.csv", TRACKER_HEADER)
+    service = EscalationService(export, tracker, tmp_path / "decisions.csv")
+
+    assert service.is_escalated("TCK-1")
+    assert not service.is_escalated("TCK-2")
+
+
+def test_unreadable_dates_in_logs_are_reported_not_fatal(files):
+    export, tracker, log = files
+    write(log, "ticket_id,decision,decided_by,decided_at\nTCK-6,Accept,Mara,yesterday\n")
+    write(
+        log.with_name("approval_requests.csv"),
+        "ticket_id,requested_by,approver,requested_at\nTCK-2,Sam,Anil,soon\n",
+    )
+
+    service = EscalationService(export, tracker, log, clock=lambda: FIXED_NOW)
+
+    assert service.escalation_for("TCK-6")["decision"] == "Accept"
+    assert service.escalation_for("TCK-6")["decided_at"] is None
+    assert service.tracker["TCK-2"]["requested_at"] is None
+    assert {(i["source"], i["ticket_id"]) for i in service.issues} >= {
+        ("decision_log", "TCK-6"),
+        ("approval_request_log", "TCK-2"),
+    }
+
+
+def test_service_reloads_when_export_changes(files, monkeypatch):
+    import os
+
+    import app.main as main
+
+    export, tracker, log = files
+    monkeypatch.setattr(main, "HELPDESK_EXPORT_PATH", str(export))
+    monkeypatch.setattr(main, "ESCALATION_TRACKER_PATH", str(tracker))
+    monkeypatch.setattr(main, "DECISION_LOG_PATH", str(log))
+    monkeypatch.setattr(main, "APPROVAL_REQUEST_LOG_PATH", str(log.with_name("req.csv")))
+    monkeypatch.setattr(main, "_escalation_service", None)
+
+    first = main.get_escalation_service()
+    assert main.get_escalation_service() is first
+    assert "TCK-7" not in first.tickets
+
+    with open(export, "a", encoding="utf-8") as file:
+        file.write("TCK-7,2026-10-06 09:00,Login,low,open,g@x.com,ken,,\n")
+    stat = os.stat(export)
+    os.utime(export, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    assert "TCK-7" in main.get_escalation_service().tickets

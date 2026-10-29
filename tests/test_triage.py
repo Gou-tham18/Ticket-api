@@ -149,3 +149,57 @@ def test_triage_uses_gemini_reply_when_available(monkeypatch):
     assert data["priority"] == "high"
     assert data["suggested_reply"] == reply
     assert data["article_ids"] == ["KB-001"]
+
+
+def _post_password_ticket():
+    return client.post(
+        "/triage",
+        json={
+            "subject": "Cannot reset password",
+            "text": "The reset email never arrived.",
+        },
+    )
+
+
+@pytest.mark.parametrize("code", [400, 403, 404])
+def test_triage_reports_gemini_configuration_errors(monkeypatch, code):
+    from google.genai import errors
+
+    monkeypatch.setenv("GEMINI_API_KEY", "bad-key")
+    rejected = errors.ClientError(
+        code, {"error": {"code": code, "status": "REJECTED"}}
+    )
+
+    with patch("app.triage_service.genai.Client") as mock_client:
+        mock_client.return_value.models.generate_content.side_effect = rejected
+        response = _post_password_ticket()
+
+    assert response.status_code == 503
+    assert "GEMINI_API_KEY" in response.json()["detail"]
+    assert "bad-key" not in response.json()["detail"]
+
+
+def test_triage_uses_fallback_when_gemini_rate_limits(monkeypatch):
+    from google.genai import errors
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    limited = errors.ClientError(
+        429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED"}}
+    )
+
+    with patch("app.triage_service.genai.Client") as mock_client:
+        mock_client.return_value.models.generate_content.side_effect = limited
+        response = _post_password_ticket()
+
+    assert response.status_code == 200
+    assert response.json()["priority"] == "normal"
+
+
+@pytest.mark.parametrize(
+    "category, expected",
+    [("Login", "urgent"), ("Billing", "urgent"), ("Shipping", "normal")],
+)
+def test_model_urgent_priority_is_only_capped_for_shipping(category, expected):
+    from app.triage_service import determine_priority
+
+    assert determine_priority("Help", "Something is wrong.", "urgent", category) == expected

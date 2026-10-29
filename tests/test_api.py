@@ -129,3 +129,24 @@ def test_day1_summary_module_matches_sample_csv():
         "Login": 10,
     }
     assert average_hours == 25.27
+
+
+def test_load_tickets_accepts_messy_csv(tmp_path):
+    from app.main import load_tickets
+
+    path = tmp_path / "tickets.csv"
+    path.write_text(
+        "﻿ticket_id,created_at,resolved_at,category,priority,status\n"
+        "TCK-1, 2026-03-02 08:23 ,02/03/2026 17:23,Billing,urgent,closed\n"
+        ",,,,,\n"
+        "TCK-2,not a date,,Login,low,open\n"
+        "TCK-3,2026-03-03 09:00,,Shipping,normal,open\n",
+        encoding="utf-8",
+    )
+
+    tickets = load_tickets(path)
+
+    assert [t["ticket_id"] for t in tickets] == ["TCK-1", "TCK-3"]
+    assert tickets[0]["created_at"] == "2026-03-02 08:23"
+    assert tickets[0]["resolved"].day == 2
+    assert tickets[1]["resolved"] is None
