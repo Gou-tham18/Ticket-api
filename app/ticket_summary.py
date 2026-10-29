@@ -75,16 +75,20 @@ def process_tickets_file(file_path):
             clean_header = [col.strip() for col in header]
 
             # Verify required columns exist in the header
-            required_columns = ["category", "created_at", "resolved_at"]
+            required_columns = ["category", "created_at"]
             for col in required_columns:
                 if col not in clean_header:
                     print(f"Error: Required column '{col}' is missing from CSV header.")
                     return category_counts, 0.0
 
+            # The Help Desk export has no resolved_at column. Tickets are
+            # still counted, but no average resolution time can be given.
+            has_resolved = "resolved_at" in clean_header
+
             # Find the index of each column we care about
             category_idx = clean_header.index("category")
             created_idx = clean_header.index("created_at")
-            resolved_idx = clean_header.index("resolved_at")
+            resolved_idx = clean_header.index("resolved_at") if has_resolved else None
             expected_field_count = len(clean_header)
 
             # Iterate through rows starting from line 2 (line 1 is the header)
@@ -103,7 +107,7 @@ def process_tickets_file(file_path):
 
                 category_raw = row[category_idx]
                 created_raw = row[created_idx]
-                resolved_raw = row[resolved_idx]
+                resolved_raw = row[resolved_idx] if has_resolved else ""
 
                 # 3. Parse timestamps and handle invalid ones
                 try:
@@ -133,7 +137,9 @@ def process_tickets_file(file_path):
         return category_counts, 0.0
 
     # Calculate average resolution time in hours
-    if resolution_durations:
+    if not has_resolved:
+        average_hours = None
+    elif resolution_durations:
         average_hours = round(sum(resolution_durations) / len(resolution_durations), 2)
     else:
         average_hours = 0.0
@@ -162,7 +168,10 @@ def main():
     else:
         print("  (No valid tickets found)")
 
-    print(f"\nAverage Resolution Time: {avg_hours:.2f} hours")
+    if avg_hours is None:
+        print("\nAverage Resolution Time: not available (no resolved_at column)")
+    else:
+        print(f"\nAverage Resolution Time: {avg_hours:.2f} hours")
     print("=" * 40 + "\n")
 
 

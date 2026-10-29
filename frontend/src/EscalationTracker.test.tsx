@@ -9,7 +9,7 @@ import { UrgentOpenAnalysis, UrgentTicket } from './types/escalation';
 
 // Follow VITE_API_BASE_URL (for example from frontend/.env) like the app does.
 const BASE_URL = getApiBaseUrl();
-
+vi.stubEnv('VITE_API_BASE_URL', BASE_URL);
 function ticket(overrides: Partial<UrgentTicket>): UrgentTicket {
   return {
     ticket_id: 'TCK-0000',
@@ -267,6 +267,15 @@ describe('Escalation Tracker', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/malformed response/i);
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('explains a missing backend route instead of showing a bare "Not Found"', async () => {
+    mockFetch(() => jsonResponse({ detail: 'Not Found' }, 404));
+    render(<EscalationTracker />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(`The backend at ${BASE_URL} does not provide /approvals/urgent-open`);
+    expect(alert).toHaveTextContent(/restart it from this project/i);
   });
 
   it('requests approval with the backend JSON format and refreshes the list', async () => {

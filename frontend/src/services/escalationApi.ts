@@ -1,4 +1,4 @@
-import { ApiError, getApiBaseUrl } from './triageApi';
+import { ApiError, getApiBaseUrl, readErrorDetail } from './triageApi';
 import {
   ApprovalRequestPayload,
   ApprovalStage,
@@ -44,26 +44,8 @@ export function isValidUrgentOpenAnalysis(
   );
 }
 
-// FastAPI returns `detail` as a string for HTTPException errors and as a
-// list of field errors for request validation failures.
-async function readErrorDetail(response: Response): Promise<string | null> {
-  try {
-    const body = await response.json();
-    if (typeof body?.detail === 'string') {
-      return body.detail;
-    }
-    if (Array.isArray(body?.detail) && body.detail.length > 0) {
-      const first = body.detail[0];
-      const field = first?.loc?.[first.loc.length - 1] || 'input';
-      return `Validation error on ${field}: ${first?.msg || 'Invalid value.'}`;
-    }
-  } catch {
-    // Fall through to the generic message.
-  }
-  return null;
-}
 
-async function request(path: string, init?: RequestInit): Promise<unknown> {
+export async function request(path: string, init?: RequestInit): Promise<unknown> {
   let response: Response;
 
   try {
@@ -76,6 +58,15 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
 
   if (!response.ok) {
     const detail = await readErrorDetail(response);
+    // FastAPI answers a missing route with a bare "Not Found"; the app's own
+    // 404s say "ticket not found". A missing route means the server on this
+    // port is an older build or a different app.
+    if (response.status === 404 && detail === 'Not Found') {
+      throw new ApiError(
+        `The backend at ${getApiBaseUrl()} does not provide ${path.split('?')[0]}. It may be an outdated or different server — restart it from this project (uvicorn app.main:app --reload).`,
+        response.status,
+      );
+    }
     throw new ApiError(
       detail ??
         `Server returned an error (${response.status}). Please try again later.`,
@@ -93,7 +84,7 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
   }
 }
 
-function postJson(path: string, body: unknown): Promise<unknown> {
+export function postJson(path: string, body: unknown): Promise<unknown> {
   return request(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

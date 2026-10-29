@@ -1,340 +1,248 @@
 # ticket-api
 
-A small FastAPI service that provides support ticket data, ticket summaries, an AI ticket triage service, and a modern React + TypeScript frontend.
+A support-ticket helper with a FastAPI backend and a React + TypeScript frontend. It triages new tickets with AI and suggests help articles (**AI Ticket Triage**). It also tracks escalations from the team's Help Desk export and approval spreadsheet (**Escalation Tracker**). And it emails the urgent tickets that need a decision to a manager, then records the manager's reply (**Escalation Dashboard**). Data comes from CSV files in `data/`; the source files are never modified.
 
-## Requirements
+You need Python 3.10 or newer, Node.js 20 or newer, and Git. Nothing needs to be configured before the first run.
 
-- Python 3.9 or newer (tested on Python 3.13)
-- pip
-- Node.js 18+ (tested on Node.js 24)
-- npm 9+ (tested on npm 11)
+## Quick start
 
-## AI Model Setup (Google Gemini)
+Use two terminals, both starting in the project folder.
 
-The ticket triage service calls Google Gemini through the `google-genai` Python package. You need a Gemini API key from https://aistudio.google.com/apikey.
-
-The backend reads these environment variables (from the project-root `.env` file locally, or from the Render service environment when deployed):
-
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `GEMINI_API_KEY` | Yes | none | Gemini API key used by `/triage` |
-| `GEMINI_MODEL` | No | `gemini-3.8-flash` | Gemini model ID |
-| `TICKETS_DATA_PATH` | No | `data/tickets_sample.csv` | Ticket CSV used by `/tickets` and `/summary` |
-
-Create the backend `.env` file from the template and add your key:
+**Windows PowerShell**
 
 ```powershell
-Copy-Item .env.example .env
-# then edit .env and set GEMINI_API_KEY=<your key>
-```
-
-Never commit `.env`; it is ignored by Git.
-
-How `/triage` behaves when Gemini cannot be used:
-
-- **`GEMINI_API_KEY` not set:** the API returns HTTP `503` with a message naming the missing setting. This is a configuration error and is not hidden.
-- **Gemini temporarily unavailable** (for example, HTTP 503 "model overloaded", a timeout, or an unreadable response): the API still returns HTTP `200` with a valid result. It uses the keyword-based category, priority `normal` (unless the ticket matches a built-in urgent or high phrase), a category-specific template reply, and the retrieved article IDs. The backend log shows `Gemini unavailable; using fallback triage`.
-- **Any other unexpected error:** the API returns HTTP `502` with `Ticket triage service failed.`
-
-
-## Project structure
-
-task3/
-|-- app/
-|   |-- escalations.py
-|   |-- main.py
-|   |-- retrieval.py
-|   |-- ticket_summary.py
-|   `-- triage_service.py
-|-- data/
-|   |-- tickets_sample.csv
-|   |-- helpdesk_export_sample.csv
-|   `-- escalation_tracker_sample.csv
-|-- docs/
-|   |-- ROOT_CAUSE.md
-|   `-- TASK5_ESCALATIONS.md
-|-- frontend/
-|   `-- React + TypeScript application
-|-- kb/
-|-- tests/
-|-- pytest.ini
-|-- requirements.txt
-`-- README.md
-
-## Setup & Run Backend
-
-Open a terminal in the project root.
-
-Create and activate a virtual environment on Windows PowerShell:
-
-```powershell
+# Terminal 1: backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-Install the dependencies:
-
-```powershell
 python -m pip install -r requirements.txt
-```
-
-Create `.env` with your `GEMINI_API_KEY` as described in [AI Model Setup](#ai-model-setup-google-gemini).
-
-Optionally set the path to the ticket CSV (it defaults to `data/tickets_sample.csv`):
-
-```powershell
-$env:TICKETS_DATA_PATH = ".\data\tickets_sample.csv"
-```
-
-Start the API:
-
-```powershell
 python -m uvicorn app.main:app --reload
 ```
 
-Open these URLs:
-
-- Web page (Task 3 static interface): http://127.0.0.1:8000/
-- Interactive API documentation: http://127.0.0.1:8000/docs
-
-Keep this backend terminal running.
-
-## Backend API endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/tickets?page=1&size=10` | List tickets with pagination |
-| GET | `/tickets/{ticket_id}` | Retrieve a ticket by ID |
-| GET | `/summary` | Get ticket totals, category counts, and average resolution hours |
-| POST | `/triage` | Submit a ticket for AI classification and knowledge-base article retrieval |
-| GET | `/helpdesk/tickets` | Task 5: Help Desk export tickets with escalation details and filters |
-| GET | `/helpdesk/tickets/{ticket_id}` | Task 5: one Help Desk ticket with its escalation details |
-| GET | `/escalations?state=pending&open_only=true` | Task 5: escalations filtered by decision state |
-| GET | `/escalations/data-issues` | Task 5: duplicates, orphans, and unreadable values found in the files |
-| POST | `/escalations/{ticket_id}/decision` | Task 5: record an Accept or Reject decision |
-| GET | `/approvals/urgent-open` | Task 5: urgent open tickets grouped by approval stage |
-| POST | `/approvals/{ticket_id}/request` | Task 5: request approval from a manager |
-
-Pagination starts at page 1. Page size must be between 1 and 100.
-
-The summary uses the Day 1 `process_tickets_file()` function from `app/ticket_summary.py`.
-
-Average resolution time includes only tickets with valid creation and resolution timestamps.
-
-The `/triage` endpoint expects a JSON payload:
-```json
-{
-  "subject": "Cannot reset my password",
-  "text": "I have not received the password reset email."
-}
-```
-And returns:
-```json
-{
-  "category": "Login",
-  "priority": "high",
-  "suggested_reply": "Please use the Forgot password option and check your spam folder.",
-  "article_ids": ["KB-001"]
-}
-```
-
-## Run Backend Tests
-
-Activate `.venv`, set `TICKETS_DATA_PATH` as shown above, and run:
-
 ```powershell
-$env:TICKETS_DATA_PATH = ".\data\tickets_sample.csv"
-python -m pytest -q
-```
-
-All 84 tests validate summary calculations, pagination, missing-ticket behavior, retrieval logic, ticket triage handling (including the missing-API-key error and the Gemini fallback), and Task 5 escalation tracking. Gemini is mocked, so no API key or network access is needed to run them.
-
-## Task 5: Escalation tracking
-
-Reads the Help Desk export and the escalation tracker the team already uses, joins them by ticket ID, and records Accept or Reject decisions with who decided and when. Source files are never modified; new decisions go to `data/decision_log.csv`.
-
-| Variable | Default |
-|---|---|
-| `HELPDESK_EXPORT_PATH` | `data/helpdesk_export_sample.csv` |
-| `ESCALATION_TRACKER_PATH` | `data/escalation_tracker_sample.csv` |
-| `DECISION_LOG_PATH` | `data/decision_log.csv` |
-| `APPROVAL_REQUEST_LOG_PATH` | `data/approval_requests.csv` |
-| `MANAGERS` | unset: managers are the approvers named in the tracker |
-
-See which urgent open tickets still need manager approval:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/approvals/urgent-open
-```
-
-Request approval from a manager:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/approvals/TCK-5110/request `
-  -ContentType "application/json" -Body '{"requested_by": "Lia", "approver": "Joyce"}'
-```
-
-Record a decision:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/escalations/TCK-5052/decision `
-  -ContentType "application/json" -Body '{"decision": "Accept", "decided_by": "Joyce"}'
-```
-
-See [docs/TASK5_ESCALATIONS.md](docs/TASK5_ESCALATIONS.md) for the requirements cross-check, decision rules, limitations, and open questions.
-
----
-
-## Frontend — AI Ticket Triage (React + TypeScript)
-
-A dedicated single-page application built with React, TypeScript, and Vite for classifying support tickets and retrieving relevant knowledge-base articles.
-
-### Frontend Technology Stack
-
-- **React 18** — Component-driven declarative UI.
-- **TypeScript** — Strict type safety for requests, responses, and UI state.
-- **Vite** — High-performance frontend build tool and local dev server.
-- **CSS** — Clean, responsive, and accessible styling with WCAG-compliant contrast and priority indicators.
-- **Vitest & React Testing Library** — Automated component and integration testing with mocked network requests.
-
-### Frontend Installation
-
-Open a second terminal window and navigate to the `frontend` directory:
-
-```powershell
+# Terminal 2: frontend
 cd frontend
+Copy-Item .env.example .env
 npm install
-```
-
-### Environment Configuration
-
-The frontend uses Vite environment variables to locate the backend API:
-
-- Copy `.env.example` to `.env`:
-  ```powershell
-  Copy-Item .env.example .env
-  ```
-- `.env.example` points `VITE_API_BASE_URL` at the deployed backend (`https://task4-ticket-triage-api.onrender.com`). To use a local backend, set it to `http://127.0.0.1:8000` in `frontend/.env`. If the variable is unset, the frontend falls back to `http://127.0.0.1:8000`.
-- Do not store API keys or secrets in frontend environment variables. All AI model keys remain securely on the backend server.
-
-### Start the Frontend Development Server
-
-In the `frontend` directory, run:
-
-```powershell
 npm run dev
 ```
 
-Open your browser at:
-`http://localhost:5173/`
+**macOS / Linux**
 
-### How the Frontend Communicates with FastAPI
-
-1. The user inputs a subject (up to 500 characters) and ticket description (up to 10,000 characters).
-2. The form validates that fields are non-empty and trims whitespace.
-3. The dedicated API service module (`frontend/src/services/triageApi.ts`) dispatches an HTTP `POST` request to `{VITE_API_BASE_URL}/triage` with:
-   ```json
-   {
-     "subject": "...",
-     "text": "..."
-   }
-   ```
-4. While the request is pending, a loading indicator displays *"Analyzing ticket and retrieving relevant articles..."* and form controls are disabled to prevent duplicate submissions.
-5. When the response arrives, the client strictly validates the response schema (`isValidTriageResult`) before rendering:
-   - **Category**: Visual badge for category classification (Billing, Login, Shipping, Refunds, Technical, Account).
-   - **Priority**: Accessible priority indicator (Urgent, High, Normal, Low) using distinct textual indicators, icons, and contrast styling so it does not rely on color alone.
-   - **Suggested Reply**: Card containing the AI-generated proposed response.
-   - **Relevant Knowledge-Base Articles**: Cited article ID badges (e.g. `KB-001`).
-6. Clicking **Clear** resets the input form, validation errors, active loading state, and prior triage results.
-
-### Escalation Tracker (Task 5)
-
-The same app has a second page, **Escalation Tracker**, at `http://localhost:5173/#/escalations` (or use the navigation at the top). The triage page is still the default at `/`.
-
-It uses the Task 5 endpoints through `frontend/src/services/escalationApi.ts`, with the same `VITE_API_BASE_URL` setting:
-
-- `GET /approvals/urgent-open` for the summary counts (urgent open, not yet sent for approval, awaiting decision, accepted, rejected), the manager list, and the table of urgent open tickets. The **Category** and **Status** filters are sent as the `category` and `status` query parameters.
-- **Request Approval** on `not_requested` tickets sends `POST /approvals/{ticket_id}/request` with `{"requested_by": "...", "approver": "..."}`. The manager list comes from the API. This only records the request; no email is sent.
-- **Accept** / **Reject** on `awaiting_decision` tickets sends `POST /escalations/{ticket_id}/decision` with `{"decision": "Accept" | "Reject", "decided_by": "..."}`.
-
-The list reloads after each successful request or decision. Backend errors (for example `409` when approval was already requested) are shown in the form.
-
-When running locally, set `VITE_API_BASE_URL=http://127.0.0.1:8000` in `frontend/.env`. The page only works against a backend that includes the Task 5 endpoints.
-
-### Run Frontend Tests
-
-The frontend suite uses Vitest and React Testing Library to verify full application behavior without needing a running backend server or external API keys:
-
-```powershell
-cd frontend
-npm test
+```bash
+# Terminal 1: backend
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --reload
 ```
 
-This runs 22 automated tests. `src/App.test.tsx` has 10 tests for the triage page, and `src/EscalationTracker.test.tsx` has 12 for the Escalation Tracker (navigation, summary counts from the API, table contents, filters as query parameters, empty and error states, the exact request and decision JSON, validation, and refresh after success). The triage tests cover:
-1. Main page header and description rendering.
-2. Subject and description inputs, submit, and clear buttons.
-3. Validation and rejection of empty and whitespace-only submissions.
-4. Successful response rendering (category, priority, suggested reply, article IDs).
-5. Loading indicator display and button disabling during in-flight requests.
-6. HTTP 422 validation error handling.
-7. HTTP 502 service/model error handling.
-8. Network failure handling (when backend is unreachable).
-9. Malformed or invalid JSON response handling without crashing.
-10. Reset behavior clearing form inputs, errors, and prior results.
-
-### Production Build
-
-To verify TypeScript compilation and create an optimized production bundle:
-
-```powershell
+```bash
+# Terminal 2: frontend
 cd frontend
+cp .env.example .env
+npm install
+npm run dev
+```
+
+If PowerShell refuses to run `Activate.ps1`, see [Troubleshooting](#troubleshooting).
+
+## Check it works
+
+1. Open http://127.0.0.1:8000/health. You should see `"status": "ok"`. `triage_ai` and `approval_email` say `not_configured` until you add those settings, which is expected.
+2. Open http://localhost:5173/#/dashboard. The Escalation Dashboard should show 120 tickets, 79 of them open.
+
+The interactive API documentation is at http://127.0.0.1:8000/docs.
+
+## Run tests
+
+Backend, from the project folder with the virtual environment active:
+
+```
+python -m pytest -q
+```
+
+This runs 222 tests: `test_api.py` 10, `test_triage.py` 14, `test_retrieval.py` 4, `test_escalations.py` 69, `test_email_approval.py` 61, and `test_production.py` 64. Gemini and the mail server are replaced with fakes, so no keys, network, or `.env` are needed. Tests work on temporary copies and never change `data/`.
+
+Frontend, from `frontend/`:
+
+```
+npm test
 npm run build
 ```
 
-This generates production-ready static assets in `frontend/dist/`.
+`npm test` runs 45 tests: `App.test.tsx` 10, `EscalationTracker.test.tsx` 13, `EscalationDashboard.test.tsx` 16, and `ErrorHandling.test.tsx` 6. `npm run build` type-checks and writes the production bundle to `frontend/dist/`.
 
-### Troubleshooting
+## Configuration
 
-- **CORS Issues (`Access to fetch at ... blocked by CORS policy`)**:
-  FastAPI has CORS middleware configured in `app/main.py` (`ALLOWED_ORIGINS`) allowing the local Vite ports (5173, 4173, 3000) on `localhost` and `127.0.0.1`, and the deployed frontend `https://ticket-api-kr58.onrender.com`. `ALLOWED_ORIGIN_REGEX` also allows those ports on any private network address (`192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`), so Vite's "Network" URL works even when your IP changes. Ensure your browser URL matches one of the allowed origins.
-- **Triage returns "not configured" (HTTP 503)**:
-  `GEMINI_API_KEY` is missing. Add it to the project-root `.env` (or the Render backend's environment) and restart the backend.
-- **Backend Connection Failure (`Unable to connect to the backend server`)**:
-  Verify the backend terminal is running `python -m uvicorn app.main:app --reload` on port 8000 and `$env:TICKETS_DATA_PATH` is set.
-- **Incorrect API URL**:
-  Check `frontend/.env` and verify `VITE_API_BASE_URL` points to your backend instance (e.g. `http://127.0.0.1:8000`). Restart `npm run dev` after changing `.env`.
-- **Port Conflict**:
-  If port 8000 or 5173 is already in use, stop conflicting processes or specify an alternate port. Remember to update `VITE_API_BASE_URL` if you change the backend port.
+Nothing is required: the app starts and the escalation pages work without a `.env` file. Add settings only for the features that need them.
 
----
+**Backend:** put settings in `.env` in the project folder. Start from the template with `Copy-Item .env.example .env` (Windows) or `cp .env.example .env` (macOS/Linux). Restart the backend after changing `.env`; `--reload` does not watch it.
 
-## Deployment (Render)
+| Variable | Needed for | Default |
+|---|---|---|
+| `GEMINI_API_KEY` | AI triage only. Get a key at https://aistudio.google.com/apikey | none: `/triage` returns `503` |
+| `GEMINI_MODEL` | AI triage | `gemini-3.8-flash` |
+| `APPROVAL_USER_NAME`, `APPROVAL_USER_EMAIL` | Sending approval emails: the team member who sends | none |
+| `APPROVAL_MANAGER_NAME`, `APPROVAL_MANAGER_EMAIL` | Sending approval emails: the manager who decides | none |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS` | Sending approval emails | port `587`, TLS `true` |
+| `TICKETS_DATA_PATH` | `/tickets` and `/summary` | `data/helpdesk_export_sample.csv` |
+| `HELPDESK_EXPORT_PATH` | Escalation pages | `data/helpdesk_export_sample.csv` |
+| `ESCALATION_TRACKER_PATH` | Escalation pages | `data/escalation_tracker_sample.csv` |
+| `DECISION_LOG_PATH`, `APPROVAL_REQUEST_LOG_PATH` | Where decisions and requests are saved | `data/decision_log.csv`, `data/approval_requests.csv` |
+| `MANAGERS` | Comma-separated approvers for the per-ticket form | the approvers named in the tracker |
+
+The two log files are created on first use and are not in Git. The Help Desk export and the tracker are only read.
+
+**Frontend:** copy `frontend/.env.example` to `frontend/.env`. Keep `VITE_API_BASE_URL=http://127.0.0.1:8000` for local use. The value is read when `npm run dev` starts, so restart it after a change. Only `VITE_API_BASE_URL` belongs here. Email and SMTP settings go in the backend `.env`, never in `frontend/.env`.
+
+### Sending email with Gmail
+
+The password belongs to the **sending** account (`APPROVAL_USER_EMAIL`), never the manager's.
+
+1. Sign in to the sending Google account and turn on 2-Step Verification (Google Account → Security).
+2. Open https://myaccount.google.com/apppasswords, create an App Password (any name, for example "ticket-api"), and copy the 16 characters.
+3. Set these in the backend `.env`, then restart the backend:
+
+```
+APPROVAL_USER_NAME=Riya
+APPROVAL_USER_EMAIL=riya.sender@gmail.com
+APPROVAL_MANAGER_NAME=Mara
+APPROVAL_MANAGER_EMAIL=mara@example.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=riya.sender@gmail.com
+SMTP_PASSWORD=the16charapppassword
+SMTP_USE_TLS=true
+```
+
+To test without sending real email, run a local server that prints messages instead (`pip install aiosmtpd`, then `python -m aiosmtpd -n -l localhost:1025`) and set `SMTP_HOST=localhost`, `SMTP_PORT=1025`, `SMTP_USE_TLS=false`, with no username or password.
+
+### Security
+
+Never commit, zip, or share `.env` or `frontend/.env`. Git already ignores them; check before zipping the folder by hand. If a `.env` was shared, create a new Gmail App Password and a new Gemini key, and delete the old ones. The API never returns these values, and `/health` reports only `configured` or `not_configured`.
+
+## Features
+
+### AI Ticket Triage (`http://localhost:5173/`)
+
+Enter a ticket subject and description. The backend sets the category with keyword rules, finds matching help articles in `kb/`, and asks Gemini for the priority and a suggested reply. Gemini can only set "urgent" for non-shipping tickets. If Gemini is temporarily unavailable, a template reply is used. A missing or rejected key returns a clear `503`.
+
+### Escalation Tracker (`http://localhost:5173/#/escalations`)
+
+Shows the urgent open tickets and where each is in manager approval: not requested, awaiting decision, accepted, or rejected. You can filter by category and status. **Request Approval** records a request, and **Accept** / **Reject** record a decision. Both are saved to the log files; no email is sent from this page.
+
+### Escalation Dashboard and the email round trip (`http://localhost:5173/#/dashboard`)
+
+The dashboard shows counts of open tickets needing attention (urgent & open, escalated label, refund over 200), the next approval email, and every ticket from the export. Customer email addresses never appear. The email settings above are needed to send.
+
+1. Under **Escalations awaiting manager approval**, check the tickets and use **Preview email** to see exactly what will be sent.
+2. Click **Send to manager for approval**. Tickets not yet requested are saved as requested and move to "awaiting decision". Tickets already awaiting are included as reminders.
+3. The manager replies to the email with one line per ticket:
+
+   ```
+   TCK-5007 APPROVE
+   TCK-5050 REJECT
+   ```
+
+   Writing APPROVE or REJECT after `Decision:` under each ticket in the quoted email also works. Words understood (any case): approve, approved, accept, accepted, ok, yes; reject, rejected, decline, declined, no.
+4. Paste the whole reply into **Record manager's reply** and click **Check reply**. Nothing is saved yet. The table shows what was understood for each ticket and why.
+5. Click **Record decisions**. Clear decisions are saved with the manager as the decider. Blank or unclear tickets stay awaiting and go in the next email. Tickets already decided are never changed.
+
+The parsing rules are in [docs/TASK5_ESCALATIONS.md](docs/TASK5_ESCALATIONS.md).
+
+## API endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/health` | Status of data files, logs, and settings. Always `200` while running |
+| GET | `/tickets?page=1&size=10` | Tickets from `TICKETS_DATA_PATH`, paginated (size 1 to 100) |
+| GET | `/tickets/{ticket_id}` | One ticket |
+| GET | `/summary` | Totals by category and average resolution hours (`null` if the file has no `resolved_at`) |
+| POST | `/triage` | `{"subject", "text"}` → category, priority, suggested reply, article IDs |
+| GET | `/helpdesk/tickets` | Help Desk tickets with escalation details. Filters: `status`, `category`, `priority`, `open_only`, `escalated` |
+| GET | `/helpdesk/tickets/{ticket_id}` | One Help Desk ticket |
+| GET | `/escalations` | Escalated tickets. Filters: `state`, `category`, `open_only` |
+| GET | `/escalations/data-issues` | Problems found in the CSV files (duplicates, bad values, short rows) |
+| POST | `/escalations/{ticket_id}/decision` | `{"decision": "Accept" or "Reject", "decided_by"}` |
+| GET | `/approvals/urgent-open` | Urgent open tickets by approval stage. Filters: `category`, `status` |
+| POST | `/approvals/{ticket_id}/request` | `{"requested_by", "approver"}` |
+| GET | `/dashboard` | Dashboard data: tickets, attention counts, next approval batch |
+| GET | `/approvals/config` | Sender and manager names and whether email is configured (no addresses) |
+| GET | `/approvals/batch/preview` | Subject and body of the next approval email |
+| POST | `/approvals/batch/send` | Send the approval email |
+| POST | `/approvals/reply/preview` | `{"reply_text"}` → decisions understood. Saves nothing |
+| POST | `/approvals/reply/record` | `{"reply_text"}` → records the clear decisions |
+
+## Errors and health check
+
+Every error response has a `detail` message meant to be shown to a person. Error messages never include keys, passwords, email addresses, full file paths, or stack traces.
+
+| Situation | Response |
+|---|---|
+| Invalid input | `422`. `detail` is FastAPI's list of `{loc, msg}`, and each `msg` is a plain sentence such as "subject is required." or "decision must be Accept or Reject.". `message` repeats the first problem |
+| Ticket ID in the wrong format on Help Desk and approval routes | `422` "Ticket IDs look like TCK-5007." |
+| Ticket CSV missing or unreadable | `503` on `/tickets` and `/summary` only. The server still starts, and the data loads once the file is back |
+| Help Desk export missing, unreadable, or without a `ticket_id` column | `503` on the escalation endpoints, naming the file and setting |
+| Tracker missing | Treated as empty and listed in `/escalations/data-issues` |
+| Bad values in a CSV (non-numeric refund, unreadable date, short row) | Treated as blank and listed in `/escalations/data-issues` |
+| Log file locked (for example, open in Excel) | `503` "Could not save to decision_log.csv. Close it if it is open in Excel and try again." Nothing is saved |
+| AI or email not configured | `503` naming the missing setting |
+| Gemini or the mail server fails | `502` |
+| Anything unexpected | `500` with an `error_id`. The full error is in the backend log under the same ID |
+
+`GET /health` is fast and local: it never calls Gemini, sends email, or uses the network. It returns `200` whenever the server is running, so it can be a hosting health check. Problems are reported in the body:
+
+```json
+{
+  "status": "ok",
+  "time": "2026-10-30T09:15:00",
+  "checks": {
+    "ticket_data": "ok",
+    "helpdesk_export": "ok",
+    "escalation_tracker": "ok",
+    "logs_writable": "ok",
+    "triage_ai": "configured",
+    "approval_email": "configured"
+  }
+}
+```
+
+File checks are `ok`, `missing`, or `unreadable`. `logs_writable` is `ok` or `not_writable`. `status` is `degraded` if any of those four is not `ok`. Missing AI or email settings show as `not_configured`, but they don't make the status degraded.
+
+## Deployment
+
+The project is deployed on Render:
 
 | Service | Render type | URL |
 |---|---|---|
 | Backend (FastAPI) | Web service | https://task4-ticket-triage-api.onrender.com |
 | Frontend (React) | Static site | https://ticket-api-kr58.onrender.com |
 
-The settings below are the typical values for this project; check them against the Render dashboard.
-
-Backend:
+Backend settings:
 
 - Build command: `pip install -r requirements.txt`
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Environment: set `GEMINI_API_KEY` (and optionally `GEMINI_MODEL`) in the service's Environment settings.
+- Health check path: `/health`
+- Environment: `GEMINI_API_KEY`, and the `APPROVAL_*` and `SMTP_*` settings if emails should be sent. Set them in the service's Environment settings, not in a committed file.
 
-Frontend:
+Frontend settings:
 
 - Root directory: `frontend`
 - Build command: `npm install && npm run build`
 - Publish directory: `dist`
-- Environment: `VITE_API_BASE_URL=https://task4-ticket-triage-api.onrender.com`. This value is compiled in at build time, so redeploy after changing it.
+- Environment: `VITE_API_BASE_URL=https://task4-ticket-triage-api.onrender.com`. It is compiled in at build time, so redeploy after changing it.
 
-If the frontend URL changes, add the new origin to `ALLOWED_ORIGINS` in `app/main.py`.
+If the frontend URL changes, add it to `ALLOWED_ORIGINS` in `app/main.py`. On Render's free tier the disk is reset on each deploy, so the decision and request logs written there are lost.
 
----
+## Troubleshooting
 
-## Stop the Servers
-
-- To stop the backend: Press `Ctrl+C` in the backend terminal.
-- To stop the frontend: Press `Ctrl+C` in the frontend terminal.
+- **PowerShell won't run `Activate.ps1`** ("running scripts is disabled"): run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once. Or skip activation and use `.\.venv\Scripts\python -m uvicorn app.main:app --reload`.
+- **"Unable to connect to the backend server"**: check the backend terminal is running and http://127.0.0.1:8000/health opens. Check `frontend/.env` has `VITE_API_BASE_URL=http://127.0.0.1:8000`, and restart `npm run dev` after changing it.
+- **The pages show old data or are missing features**: check the backend was started from this project folder and not an older copy. Stop any other `uvicorn` on port 8000.
+- **Blocked by CORS policy**: open the frontend at `http://localhost:5173` or `http://127.0.0.1:5173`. Private network addresses (`192.168.x.x`, `10.x.x.x`) on ports 5173, 4173, and 3000 are also allowed.
+- **Dashboard says the user and manager are not configured**: the `APPROVAL_*` settings must be in the backend `.env` in the project folder, not in `frontend/.env`. Restart the backend afterwards.
+- **"Approval email could not be sent" (502)**: the backend terminal shows the reason. For Gmail, check that `SMTP_USERNAME` is the sending address and `SMTP_PASSWORD` is an App Password, not the normal password.
+- **"Could not save to … Close it if it is open in Excel"**: close the log file in Excel and try again.
+- **Port 8000 or 5173 already in use**: stop the other process, or start on another port (`--port 8001`) and update `VITE_API_BASE_URL` to match.
+- **`pytest` fails in `test_api.py`**: a `TICKETS_DATA_PATH` left set in the terminal overrides the test data. Run `Remove-Item Env:TICKETS_DATA_PATH` (PowerShell) or `unset TICKETS_DATA_PATH`.
+- **`npm test` fails with an engine error**: the test runner needs Node.js 20 or newer. Check with `node --version`.

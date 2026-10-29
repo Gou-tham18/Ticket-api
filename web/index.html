@@ -104,7 +104,11 @@
         averageStat.className = "stat";
 
         const averageValue = document.createElement("b");
-        averageValue.textContent = summary.average_resolution_hours;
+        // The Help Desk export has no resolved_at column, so there is no average.
+        averageValue.textContent =
+          summary.average_resolution_hours === null
+            ? "n/a"
+            : summary.average_resolution_hours;
 
         averageStat.append(
           averageValue,

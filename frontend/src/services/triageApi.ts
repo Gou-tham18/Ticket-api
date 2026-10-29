@@ -12,6 +12,35 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The user-facing message in a FastAPI error body, or null if there is none.
+ *
+ * - `message`: the backend's plain first validation problem.
+ * - `detail` string: HTTPException messages; a 500 adds its `error_id`.
+ * - `detail` list: field errors from older backends without `message`.
+ */
+export async function readErrorDetail(response: Response): Promise<string | null> {
+  try {
+    const body = await response.json();
+    if (typeof body?.message === 'string' && body.message) {
+      return body.message;
+    }
+    if (typeof body?.detail === 'string') {
+      return typeof body.error_id === 'string'
+        ? `${body.detail} (Error ID: ${body.error_id})`
+        : body.detail;
+    }
+    if (Array.isArray(body?.detail) && body.detail.length > 0) {
+      const first = body.detail[0];
+      const field = first?.loc?.[first.loc.length - 1] || 'input';
+      return `Validation error on ${field}: ${first?.msg || 'Invalid value.'}`;
+    }
+  } catch {
+    // Fall through to the caller's generic message.
+  }
+  return null;
+}
+
 const VALID_CATEGORIES = [
   'Billing',
   'Login',
@@ -87,21 +116,12 @@ export async function submitTriage(
 
   if (!response.ok) {
     if (response.status === 422) {
-      let detailMsg =
-        'Request validation failed. Please check that subject is within 500 characters and description within 10,000 characters.';
-      try {
-        const errorJson = await response.json();
-        if (Array.isArray(errorJson?.detail) && errorJson.detail.length > 0) {
-          const firstErr = errorJson.detail[0];
-          const field = firstErr?.loc?.[firstErr.loc.length - 1] || 'Input';
-          detailMsg = `Validation error on ${field}: ${firstErr?.msg || 'Invalid value.'}`;
-        } else if (typeof errorJson?.detail === 'string') {
-          detailMsg = errorJson.detail;
-        }
-      } catch {
-        // Fall back to detailMsg
-      }
-      throw new ApiError(detailMsg, 422);
+      const detail = await readErrorDetail(response);
+      throw new ApiError(
+        detail ??
+          'Request validation failed. Please check that subject is within 500 characters and description within 10,000 characters.',
+        422,
+      );
     }
 
     if (response.status === 502) {
@@ -109,6 +129,14 @@ export async function submitTriage(
         'The ticket triage service encountered a server error. Please try again later.',
         502,
       );
+    }
+
+    // 503 explains what is not configured; 500 carries an error ID.
+    if (response.status === 503 || response.status === 500) {
+      const detail = await readErrorDetail(response);
+      if (detail) {
+        throw new ApiError(detail, response.status);
+      }
     }
 
     throw new ApiError(
