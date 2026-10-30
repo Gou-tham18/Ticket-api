@@ -1,40 +1,163 @@
+
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ticket overview</title>
+
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #ddd; }
-    .stat { display: inline-block; margin-right: 1.5rem; }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 760px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 4px 8px;
+      border-bottom: 1px solid #ddd;
+    }
+
+    .stat {
+      display: inline-block;
+      margin-right: 1.5rem;
+    }
+
+    .error {
+      color: #b91c1c;
+    }
   </style>
 </head>
+
 <body>
   <h1>Ticket overview</h1>
+
   <div id="summary">Loading summary...</div>
+
   <h2>Latest tickets</h2>
+
   <table>
-    <thead><tr><th>ID</th><th>Created</th><th>Category</th><th>Priority</th><th>Status</th></tr></thead>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Created</th>
+        <th>Category</th>
+        <th>Priority</th>
+        <th>Status</th>
+      </tr>
+    </thead>
     <tbody id="rows"></tbody>
   </table>
+
   <script>
     function showDate(text) {
       const d = new Date(text.replace(" ", "T"));
-      return d.getDate() + "/" + d.getMonth() + "/" + d.getFullYear();
+
+      if (Number.isNaN(d.getTime())) {
+        return text;
+      }
+
+      // JavaScript months start at 0, so add 1.
+      return (
+        d.getDate() +
+        "/" +
+        (d.getMonth() + 1) +
+        "/" +
+        d.getFullYear()
+      );
     }
 
     async function load() {
-      const summary = await (await fetch("/summary")).json();
-      document.getElementById("summary").innerHTML =
-        '<span class="stat"><b>' + summary.total + '</b> tickets</span>' +
-        '<span class="stat"><b>' + summary.average_resolution_hours + '</b> hours average resolution</span>';
-      const tickets = await (await fetch("/tickets?page=1&size=10")).json();
-      document.getElementById("rows").innerHTML = tickets.map(t =>
-        "<tr><td>" + t.ticket_id + "</td><td>" + showDate(t.created_at) + "</td><td>" +
-        t.category + "</td><td>" + t.priority + "</td><td>" + t.status + "</td></tr>").join("");
+      const summaryElement = document.getElementById("summary");
+      const rowsElement = document.getElementById("rows");
+
+      try {
+        const summaryResponse = await fetch("/summary");
+
+        if (!summaryResponse.ok) {
+          throw new Error("Failed to load ticket summary");
+        }
+
+        const summary = await summaryResponse.json();
+
+        summaryElement.replaceChildren();
+
+        const totalStat = document.createElement("span");
+        totalStat.className = "stat";
+
+        const totalValue = document.createElement("b");
+        totalValue.textContent = summary.total;
+
+        totalStat.append(
+          totalValue,
+          document.createTextNode(" tickets")
+        );
+
+        const averageStat = document.createElement("span");
+        averageStat.className = "stat";
+
+        const averageValue = document.createElement("b");
+        // The Help Desk export has no resolved_at column, so there is no average.
+        averageValue.textContent =
+          summary.average_resolution_hours === null
+            ? "n/a"
+            : summary.average_resolution_hours;
+
+        averageStat.append(
+          averageValue,
+          document.createTextNode(" hours average resolution")
+        );
+
+        summaryElement.append(totalStat, averageStat);
+
+        const ticketsResponse = await fetch(
+          "/tickets?page=1&size=10"
+        );
+
+        if (!ticketsResponse.ok) {
+          throw new Error("Failed to load tickets");
+        }
+
+        const tickets = await ticketsResponse.json();
+
+        rowsElement.replaceChildren();
+
+        for (const ticket of tickets) {
+          const row = document.createElement("tr");
+
+          const values = [
+            ticket.ticket_id,
+            showDate(ticket.created_at),
+            ticket.category,
+            ticket.priority,
+            ticket.status
+          ];
+
+          for (const value of values) {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.appendChild(cell);
+          }
+
+          rowsElement.appendChild(row);
+        }
+      } catch (error) {
+        summaryElement.textContent =
+          "Unable to load ticket data. Please try again later.";
+        summaryElement.className = "error";
+        console.error("Ticket page error:", error);
+      }
     }
+
     load();
   </script>
 </body>
 </html>
+

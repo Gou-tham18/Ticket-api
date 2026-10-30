@@ -1,0 +1,31 @@
+ticket_id,requested_by,approver,requested_at,decision,decided_at,notes
+TCK-5118,Riya,Anil,2026-10-08 23:19,rejected,2026-10-10 01:19,
+TCK-5052,Tom,Anil,2026-10-06 03:55,,,
+TCK-5111,Riya,Joyce,2026-10-08 01:26,approved,08/10/2026 02:26,
+TCK-5041,Sam,Joyce,2026-10-05 15:25,approved,2026-10-05 20:25,
+TCK-5115,Zoe,Anil,2026-10-11 07:26,approved,2026-10-13 09:26,waiting on email
+TCK-5007,Zoe,Joyce,2026-10-05 23:05,Need more info,06/10/2026 00:05,waiting on email
+TCK-5109,Riya,Joyce,2026-10-08 10:51,,,
+TCK-5003,Riya,Joyce,2026-10-07 09:08,Approved,2026-10-07 10:08,chased twice
+TCK-5060,Sam,Joyce,2026-10-07 22:35,Need more info,2026-10-08 03:35,
+TCK-5039,Sam,Anil,2026-10-06 02:10,rejected,2026-10-06 04:10,see thread
+TCK-5036,Sam,Joyce,2026-10-09 20:30,Approved,2026-10-09 22:30,
+TCK-5025,Zoe,Joyce,2026-10-12 12:46,,,
+TCK-5049,Sam,Joyce,2026-10-09 02:28,OK,2026-10-10 04:28,customer angry
+TCK-5064,Zoe,Anil,2026-10-06 00:23,approved,2026-10-06 05:23,customer angry
+TCK-5079,Tom,Anil,2026-10-07 09:02,approved,2026-10-08 11:02,chased twice
+TCK-5104,Zoe,Anil,2026-10-07 06:37,OK,2026-10-07 07:37,chased twice
+TCK-5012,Sam,Anil,2026-10-07 20:13,Approved,2026-10-09 02:13,
+TCK-5063,Sam,Anil,2026-10-07 18:39,,,see thread
+TCK-5050,Tom,Joyce,2026-10-12 22:16,,,
+TCK-5057,Tom,Anil,2026-10-09 19:32,OK,2026-10-11 01:32,chased twice
+TCK-5106,Zoe,Joyce,2026-10-06 10:42,OK,07/10/2026 12:42,
+TCK-5077,Sam,Anil,2026-10-06 03:39,rejected,2026-10-06 08:39,chased twice
+TCK-5101,Zoe,Anil,2026-10-11 00:40,,,
+TCK-5087,Zoe,Joyce,2026-10-11 16:00,rejected,11/10/2026 17:00,
+TCK-5058,Zoe,Anil,2026-10-07 23:04,OK,08/10/2026 00:04,
+TCK-5029,Sam,Joyce,2026-10-11 05:31,Approved,2026-10-12 07:31,see thread
+TCK-5046,Zoe,Anil,2026-10-07 17:08,Rejected,09/10/2026 19:08,chased twice
+TCK-5102,Zoe,Joyce,2026-10-09 05:56,Need more info,09/10/2026 06:56,waiting on email
+TCK-4999,Tom,Anil,2026-10-05 09:30,Approved,2026-10-05 10:10,not in export
+TCK-5111,Riya,Joyce,2026-10-08 01:26,approved,08/10/2026 02:26,
