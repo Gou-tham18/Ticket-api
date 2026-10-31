@@ -4,19 +4,11 @@ import {
   ApprovalConfig,
   BatchPreview,
   BatchSendResult,
+  ButtonSetting,
   Dashboard,
-  ReplyResult,
-  ReplyStatus,
 } from '../types/dashboard';
 
-const REPLY_STATUSES: ReplyStatus[] = [
-  'accept',
-  'reject',
-  'blank',
-  'unclear',
-  'not_found',
-  'not_awaiting',
-];
+const BUTTON_SETTINGS: ButtonSetting[] = ['PUBLIC_BASE_URL', 'APPROVAL_LINK_SECRET'];
 
 type Obj = Record<string, unknown>;
 
@@ -28,13 +20,30 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === 'string';
+}
+
+function isNullableNumber(value: unknown): boolean {
+  return value === null || typeof value === 'number';
+}
+
+function isDecision(value: unknown): boolean {
+  return value === 'Accept' || value === 'Reject';
+}
+
 export function isValidApprovalConfig(data: unknown): data is ApprovalConfig {
   return (
     isObject(data) &&
     typeof data.configured === 'boolean' &&
     typeof data.email_configured === 'boolean' &&
-    (data.user_name === null || typeof data.user_name === 'string') &&
-    (data.manager_name === null || typeof data.manager_name === 'string')
+    // Older backends have no buttons fields; they are treated as not configured.
+    (data.buttons_configured === undefined || typeof data.buttons_configured === 'boolean') &&
+    (data.buttons_missing === undefined ||
+      (isStringArray(data.buttons_missing) &&
+        data.buttons_missing.every((name) => BUTTON_SETTINGS.includes(name as ButtonSetting)))) &&
+    isNullableString(data.user_name) &&
+    isNullableString(data.manager_name)
   );
 }
 
@@ -44,7 +53,41 @@ function isValidDashboardTicket(ticket: unknown): boolean {
     typeof ticket.ticket_id === 'string' &&
     typeof ticket.is_open === 'boolean' &&
     isStringArray(ticket.labels) &&
-    isStringArray(ticket.indicators)
+    isStringArray(ticket.indicators) &&
+    (ticket.decision === null || isDecision(ticket.decision)) &&
+    isNullableString(ticket.decided_by) &&
+    isNullableString(ticket.decided_at)
+  );
+}
+
+function isValidBatchTicket(ticket: unknown): boolean {
+  return (
+    isValidDashboardTicket(ticket) &&
+    isObject(ticket) &&
+    typeof ticket.summary_line === 'string' &&
+    (ticket.send_reason === 'new' || ticket.send_reason === 'reminder') &&
+    isNullableString(ticket.last_emailed_at) &&
+    isNullableNumber(ticket.days_waiting)
+  );
+}
+
+function isValidWaitingTicket(ticket: unknown): boolean {
+  return (
+    isObject(ticket) &&
+    typeof ticket.ticket_id === 'string' &&
+    typeof ticket.summary_line === 'string' &&
+    typeof ticket.last_emailed_at === 'string' &&
+    typeof ticket.reminder_due_at === 'string'
+  );
+}
+
+function isValidRecentDecision(decision: unknown): boolean {
+  return (
+    isObject(decision) &&
+    typeof decision.ticket_id === 'string' &&
+    isDecision(decision.decision) &&
+    isNullableString(decision.decided_by) &&
+    isNullableString(decision.decided_at)
   );
 }
 
@@ -65,9 +108,12 @@ export function isValidDashboard(data: unknown): data is Dashboard {
     typeof batch.count === 'number' &&
     typeof batch.fields_saved === 'number' &&
     Array.isArray(batch.tickets) &&
-    batch.tickets.every(
-      (ticket) => isValidDashboardTicket(ticket) && typeof (ticket as Obj).summary_line === 'string',
-    )
+    batch.tickets.every(isValidBatchTicket) &&
+    Array.isArray(data.waiting_for_reply) &&
+    data.waiting_for_reply.every(isValidWaitingTicket) &&
+    isNullableString(data.next_reminder_due_at) &&
+    Array.isArray(data.recent_decisions) &&
+    data.recent_decisions.every(isValidRecentDecision)
   );
 }
 
@@ -75,7 +121,8 @@ export function isValidBatchPreview(data: unknown): data is BatchPreview {
   return (
     isObject(data) &&
     typeof data.subject === 'string' &&
-    typeof data.body === 'string' &&
+    typeof data.text_body === 'string' &&
+    typeof data.html_body === 'string' &&
     isStringArray(data.ticket_ids)
   );
 }
@@ -90,23 +137,6 @@ export function isValidBatchSendResult(data: unknown): data is BatchSendResult {
   );
 }
 
-export function isValidReplyResult(data: unknown): data is ReplyResult {
-  return (
-    isObject(data) &&
-    typeof data.manager === 'string' &&
-    isObject(data.counts) &&
-    Array.isArray(data.tickets) &&
-    data.tickets.every(
-      (ticket) =>
-        isObject(ticket) &&
-        typeof ticket.ticket_id === 'string' &&
-        typeof ticket.reason === 'string' &&
-        REPLY_STATUSES.includes(ticket.status as ReplyStatus),
-    ) &&
-    (data.recorded === undefined || isStringArray(data.recorded))
-  );
-}
-
 function validated<T>(data: unknown, isValid: (value: unknown) => value is T): T {
   if (!isValid(data)) {
     throw new ApiError('Received a malformed response from the escalation service.');
@@ -115,7 +145,12 @@ function validated<T>(data: unknown, isValid: (value: unknown) => value is T): T
 }
 
 export async function fetchApprovalConfig(): Promise<ApprovalConfig> {
-  return validated(await request('/approvals/config'), isValidApprovalConfig);
+  const config = validated(await request('/approvals/config'), isValidApprovalConfig);
+  return {
+    ...config,
+    buttons_configured: config.buttons_configured ?? false,
+    buttons_missing: config.buttons_missing ?? (config.buttons_configured ? [] : BUTTON_SETTINGS),
+  };
 }
 
 export async function fetchDashboard(): Promise<Dashboard> {
@@ -128,18 +163,4 @@ export async function fetchBatchPreview(): Promise<BatchPreview> {
 
 export async function sendApprovalBatch(): Promise<BatchSendResult> {
   return validated(await postJson('/approvals/batch/send', {}), isValidBatchSendResult);
-}
-
-export async function previewReply(replyText: string): Promise<ReplyResult> {
-  return validated(
-    await postJson('/approvals/reply/preview', { reply_text: replyText }),
-    isValidReplyResult,
-  );
-}
-
-export async function recordReply(replyText: string): Promise<ReplyResult> {
-  return validated(
-    await postJson('/approvals/reply/record', { reply_text: replyText }),
-    isValidReplyResult,
-  );
 }

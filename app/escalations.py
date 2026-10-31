@@ -18,7 +18,7 @@ import io
 import math
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -55,6 +55,13 @@ ALLOWED_DECISIONS = ("Accept", "Reject")
 DECISION_LOG_FIELDS = ["ticket_id", "decision", "decided_by", "decided_at"]
 
 REQUEST_LOG_FIELDS = ["ticket_id", "requested_by", "approver", "requested_at"]
+
+# One row per ticket per approval email sent; kind is "new" or "reminder".
+EMAIL_LOG_FIELDS = ["ticket_id", "sent_at", "kind"]
+
+DEFAULT_REMINDER_DAYS = 1
+
+RECENT_DECISIONS_LIMIT = 20
 
 URGENT_PRIORITY = "urgent"
 
@@ -190,12 +197,17 @@ def _append_csv_row(path: Path, fieldnames: List[str], row: Dict[str, str]) -> N
     Raises LogWriteError (nothing written) if the file cannot be opened,
     for example because it is open in Excel.
     """
+    _append_csv_rows(path, fieldnames, [row])
+
+
+def _append_csv_rows(path: Path, fieldnames: List[str], rows: List[Dict[str, str]]) -> None:
+    """Append several rows in a single write, so none are half-written."""
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=fieldnames)
     try:
         if not path.exists() or path.stat().st_size == 0:
             writer.writeheader()
-        writer.writerow(row)
+        writer.writerows(rows)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", newline="", encoding="utf-8") as file:
             file.write(buffer.getvalue())
@@ -236,6 +248,8 @@ class EscalationService:
         request_log_path: Optional[Path] = None,
         managers: Optional[List[str]] = None,
         fixed_manager: Optional[str] = None,
+        email_log_path: Optional[Path] = None,
+        reminder_days: int = DEFAULT_REMINDER_DAYS,
     ):
         self.export_path = Path(export_path)
         self.tracker_path = Path(tracker_path)
@@ -245,6 +259,12 @@ class EscalationService:
             if request_log_path
             else self.decision_log_path.with_name("approval_requests.csv")
         )
+        self.email_log_path = (
+            Path(email_log_path)
+            if email_log_path
+            else self.decision_log_path.with_name("approval_emails.csv")
+        )
+        self.reminder_days = reminder_days
         self.clock = clock
         self.issues: List[Dict[str, str]] = []
         self._lock = threading.Lock()
@@ -264,6 +284,7 @@ class EscalationService:
         self.refunds = self._load_refunds()
         self._load_request_log()
         self.recorded = self._load_decision_log()
+        self.last_emailed = self._load_email_log()
 
     # Loading -----------------------------------------------------------
 
@@ -457,6 +478,20 @@ class EscalationService:
                 }
         return recorded
 
+    def _load_email_log(self) -> Dict[str, datetime]:
+        """Latest time each ticket was in a sent approval email."""
+        last_emailed: Dict[str, datetime] = {}
+        for row, _ in self._read_optional(self.email_log_path, "approval_email_log"):
+            ticket_id = row.get("ticket_id", "")
+            if ticket_id not in self.tickets:
+                continue
+            sent_at = self._parse_time(
+                ticket_id, "sent_at", row.get("sent_at", ""), source="approval_email_log"
+            )
+            if sent_at and (ticket_id not in last_emailed or sent_at > last_emailed[ticket_id]):
+                last_emailed[ticket_id] = sent_at
+        return last_emailed
+
     # Views ---------------------------------------------------------------
 
     def is_escalated(self, ticket_id: str) -> bool:
@@ -646,6 +681,7 @@ class EscalationService:
             if refund is not None and refund > REFUND_THRESHOLD:
                 indicators.append("refund_over_200")
 
+        escalation = view["escalation"] or {}
         return {
             "ticket_id": ticket_id,
             "category": view["category"],
@@ -657,25 +693,146 @@ class EscalationService:
             "labels": label_list(row),
             "refund_amount": refund,
             "indicators": indicators,
-            "approval_stage": self.approval_stage(view) if is_urgent_open else None,
+            # Urgent open tickets always have a stage (they can be emailed);
+            # other tickets only when they are escalated.
+            "approval_stage": (
+                self.approval_stage(view)
+                if is_urgent_open or view["escalation"] is not None
+                else None
+            ),
+            "decision": escalation.get("decision"),
+            "decided_by": escalation.get("decided_by"),
+            "decided_at": escalation.get("decided_at"),
+            "decision_source": escalation.get("decision_source"),
         }
 
-    def approval_batch(self) -> List[Dict]:
-        """Urgent open tickets still needing a decision, oldest first."""
-        batch = [
-            ticket
-            for ticket in (self._dashboard_ticket(t) for t in self.tickets)
-            if ticket["approval_stage"] in BATCH_STAGES
-        ]
-        batch.sort(key=lambda t: (_sort_time(t["created_at"]), t["ticket_id"]))
-        for ticket in batch:
+    @staticmethod
+    def is_urgent_open(ticket: Dict) -> bool:
+        return ticket["is_open"] and ticket["priority"] == URGENT_PRIORITY
+
+    def ticket_summary(self, ticket_id: str) -> Dict:
+        """Dashboard fields plus the one-line summary. Raises TicketNotFound."""
+        ticket = self._dashboard_ticket(ticket_id)
+        ticket["summary_line"] = ticket_line(ticket)
+        return ticket
+
+    def _first_requested_at(self, ticket_id: str) -> Optional[datetime]:
+        tracked = self.tracker.get(ticket_id)
+        if tracked and tracked["requested_at"]:
+            return tracked["requested_at"]
+        return self.last_emailed.get(ticket_id)
+
+    def last_emailed_at(self, ticket_id: str) -> Optional[datetime]:
+        """Latest approval email for the ticket, else when it was requested.
+
+        Tracker requests made before the email log existed count as emailed
+        at their requested_at.
+        """
+        if ticket_id in self.last_emailed:
+            return self.last_emailed[ticket_id]
+        tracked = self.tracker.get(ticket_id)
+        return tracked["requested_at"] if tracked else None
+
+    def _approval_queue(self) -> Tuple[List[Dict], List[Dict]]:
+        """(ready to send, waiting for the manager's reply).
+
+        Ready: urgent open tickets never requested ("new"), and those awaiting
+        a decision whose last email is at least reminder_days old ("reminder").
+        Accepted and rejected tickets never come back.
+        """
+        now = self.clock()
+        wait = timedelta(days=self.reminder_days)
+        new, reminders, waiting = [], [], []
+        for ticket_id in self.tickets:
+            ticket = self._dashboard_ticket(ticket_id)
+            if not self.is_urgent_open(ticket) or ticket["approval_stage"] not in BATCH_STAGES:
+                continue
             ticket["summary_line"] = ticket_line(ticket)
-        return batch
+
+            if ticket["approval_stage"] == "not_requested":
+                new.append(
+                    {
+                        **ticket,
+                        "send_reason": "new",
+                        "last_emailed_at": None,
+                        "first_requested_at": None,
+                        "days_waiting": None,
+                    }
+                )
+                continue
+
+            last = self.last_emailed_at(ticket_id)
+            first = self._first_requested_at(ticket_id)
+            # An unknown email time (unreadable date) is treated as due now.
+            if last is None or now - last >= wait:
+                reminders.append(
+                    {
+                        **ticket,
+                        "send_reason": "reminder",
+                        "last_emailed_at": _format_time(last),
+                        "first_requested_at": _format_time(first),
+                        "days_waiting": (now - first).days if first else None,
+                    }
+                )
+            else:
+                waiting.append(
+                    {
+                        "ticket_id": ticket_id,
+                        "category": ticket["category"],
+                        "summary_line": ticket["summary_line"],
+                        "last_emailed_at": _format_time(last),
+                        "reminder_due_at": _format_time(last + wait),
+                        "_due": last + wait,
+                    }
+                )
+
+        def oldest_first(t: Dict):
+            return (_sort_time(t["created_at"]), t["ticket_id"])
+
+        new.sort(key=oldest_first)
+        reminders.sort(key=oldest_first)
+        waiting.sort(key=lambda t: (t["_due"], t["ticket_id"]))
+        for ticket in waiting:
+            del ticket["_due"]
+        return new + reminders, waiting
+
+    def approval_batch(self) -> List[Dict]:
+        """Tickets ready to send: new first, then reminders, oldest first."""
+        return self._approval_queue()[0]
+
+    def waiting_for_reply(self) -> List[Dict]:
+        """Emailed tickets not yet due for a reminder, soonest due first."""
+        return self._approval_queue()[1]
+
+    def next_reminder_due_at(self) -> Optional[str]:
+        waiting = self.waiting_for_reply()
+        return waiting[0]["reminder_due_at"] if waiting else None
+
+    def recent_decisions(self) -> List[Dict]:
+        """Decisions recorded through the app, newest first, at most 20."""
+        # Reversed first so that, for equal times, later log rows come first.
+        entries = sorted(
+            reversed(list(self.recorded.items())),
+            key=lambda item: item[1]["decided_at"] or datetime.min,
+            reverse=True,
+        )
+        return [
+            {
+                "ticket_id": ticket_id,
+                "category": self.tickets[ticket_id].get("category"),
+                "decision": entry["decision"],
+                "decided_by": entry["decided_by"],
+                "decided_at": _format_time(entry["decided_at"]),
+            }
+            for ticket_id, entry in entries[:RECENT_DECISIONS_LIMIT]
+        ]
 
     def dashboard(self) -> Dict:
         tickets = [self._dashboard_ticket(ticket_id) for ticket_id in self.tickets]
+        # Open tickets first, then resolved; oldest first within each group.
+        tickets.sort(key=lambda t: (not t["is_open"], _sort_time(t["created_at"])))
         open_tickets = [t for t in tickets if t["is_open"]]
-        batch = self.approval_batch()
+        batch, waiting = self._approval_queue()
 
         def count(indicator: str) -> int:
             return sum(indicator in t["indicators"] for t in open_tickets)
@@ -695,6 +852,10 @@ class EscalationService:
                 "fields_saved": len(batch) * FIELDS_PER_TICKET,
                 "tickets": batch,
             },
+            "reminder_days": self.reminder_days,
+            "waiting_for_reply": waiting,
+            "next_reminder_due_at": waiting[0]["reminder_due_at"] if waiting else None,
+            "recent_decisions": self.recent_decisions(),
         }
 
     def review_reply(self, reply_text: str) -> Dict:
@@ -787,6 +948,28 @@ class EscalationService:
             )
 
         return self.ticket_view(ticket_id)
+
+    def log_emails(self, tickets: List[Dict], sent_at: datetime) -> None:
+        """Record that these batch tickets were emailed, in one write.
+
+        Raises LogWriteError before anything changes in memory.
+        """
+        sent_at = sent_at.replace(second=0, microsecond=0)
+        with self._lock:
+            _append_csv_rows(
+                self.email_log_path,
+                EMAIL_LOG_FIELDS,
+                [
+                    {
+                        "ticket_id": ticket["ticket_id"],
+                        "sent_at": _format_time(sent_at),
+                        "kind": ticket["send_reason"],
+                    }
+                    for ticket in tickets
+                ],
+            )
+            for ticket in tickets:
+                self.last_emailed[ticket["ticket_id"]] = sent_at
 
     # Recording -----------------------------------------------------------
 

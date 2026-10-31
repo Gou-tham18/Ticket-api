@@ -29,6 +29,8 @@ SETTINGS = ApprovalSettings(
     user_email="riya@example.org",
     manager_name="Mara",
     manager_email="mara@example.org",
+    public_base_url="https://approvals.example.org",
+    link_secret="test-link-secret-xxxxxxxxxxxxxxxxxxxxxxxx",
 )
 
 
@@ -51,6 +53,7 @@ def paths(tmp_path, monkeypatch):
         "tracker": tmp_path / "tracker.csv",
         "decisions": tmp_path / "decisions.csv",
         "requests": tmp_path / "requests.csv",
+        "emails": tmp_path / "emails.csv",
     }
     shutil.copyfile(SAMPLE_EXPORT, files["export"])
     shutil.copyfile(SAMPLE_TRACKER, files["tracker"])
@@ -58,6 +61,7 @@ def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "ESCALATION_TRACKER_PATH", str(files["tracker"]))
     monkeypatch.setattr(main, "DECISION_LOG_PATH", str(files["decisions"]))
     monkeypatch.setattr(main, "APPROVAL_REQUEST_LOG_PATH", str(files["requests"]))
+    monkeypatch.setattr(main, "APPROVAL_EMAIL_LOG_PATH", str(files["emails"]))
     monkeypatch.setattr(main, "APPROVAL_MANAGER_NAME", "Mara")
     monkeypatch.setattr(main, "_escalation_service", None)
     return files

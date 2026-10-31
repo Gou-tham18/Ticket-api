@@ -33,8 +33,8 @@ const VIEWS: Record<View, { title: string; description: string; footer: string; 
   dashboard: {
     title: 'Escalation Dashboard',
     description:
-      'Send the urgent open tickets that need a decision to the manager in one email, then paste ' +
-      'their reply to record the approvals.',
+      'Send the urgent open tickets that need a decision to the manager in one email. The ' +
+      'manager approves or rejects each one with the buttons in the email.',
     footer: 'Escalation Dashboard • Task 5',
     href: DASHBOARD_HASH,
   },

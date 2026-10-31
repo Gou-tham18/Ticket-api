@@ -1,6 +1,6 @@
 # ticket-api
 
-A support-ticket helper with a FastAPI backend and a React + TypeScript frontend. It triages new tickets with AI and suggests help articles (**AI Ticket Triage**). It also tracks escalations from the team's Help Desk export and approval spreadsheet (**Escalation Tracker**). And it emails the urgent tickets that need a decision to a manager, then records the manager's reply (**Escalation Dashboard**). Data comes from CSV files in `data/`; the source files are never modified.
+A support-ticket helper with a FastAPI backend and a React + TypeScript frontend. It triages new tickets with AI and suggests help articles (**AI Ticket Triage**). It also tracks escalations from the team's Help Desk export and approval spreadsheet (**Escalation Tracker**). And it emails the urgent tickets that need a decision to a manager, who answers with Approve/Reject buttons in the email (**Escalation Dashboard**). Data comes from CSV files in `data/`; the source files are never modified.
 
 You need Python 3.10 or newer, Node.js 20 or newer, and Git. Nothing needs to be configured before the first run.
 
@@ -61,7 +61,7 @@ Backend, from the project folder with the virtual environment active:
 python -m pytest -q
 ```
 
-This runs 222 tests: `test_api.py` 10, `test_triage.py` 14, `test_retrieval.py` 4, `test_escalations.py` 69, `test_email_approval.py` 61, and `test_production.py` 64. Gemini and the mail server are replaced with fakes, so no keys, network, or `.env` are needed. Tests work on temporary copies and never change `data/`.
+This runs 311 tests: `test_api.py` 10, `test_triage.py` 14, `test_retrieval.py` 4, `test_escalations.py` 69, `test_email_approval.py` 61, `test_production.py` 64, and `test_approval_buttons.py` 89. Gemini and the mail server are replaced with fakes and the clock is fixed, so no keys, network, or `.env` are needed. Tests work on temporary copies and never change `data/`.
 
 Frontend, from `frontend/`:
 
@@ -70,7 +70,7 @@ npm test
 npm run build
 ```
 
-`npm test` runs 45 tests: `App.test.tsx` 10, `EscalationTracker.test.tsx` 13, `EscalationDashboard.test.tsx` 16, and `ErrorHandling.test.tsx` 6. `npm run build` type-checks and writes the production bundle to `frontend/dist/`.
+`npm test` runs 56 tests: `App.test.tsx` 10, `EscalationTracker.test.tsx` 13, `EscalationDashboard.test.tsx` 27, and `ErrorHandling.test.tsx` 6. `npm run build` type-checks and writes the production bundle to `frontend/dist/`.
 
 ## Configuration
 
@@ -85,13 +85,18 @@ Nothing is required: the app starts and the escalation pages work without a `.en
 | `APPROVAL_USER_NAME`, `APPROVAL_USER_EMAIL` | Sending approval emails: the team member who sends | none |
 | `APPROVAL_MANAGER_NAME`, `APPROVAL_MANAGER_EMAIL` | Sending approval emails: the manager who decides | none |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS` | Sending approval emails | port `587`, TLS `true` |
+| `PUBLIC_BASE_URL` | Sending approval emails: where the manager's browser reaches this backend, for example `https://your-name.ngrok-free.dev`. Must start with `https://` (`http://` for local testing only); a trailing `/` is removed | none: sending returns `503` |
+| `APPROVAL_LINK_SECRET` | Sending approval emails: signs the Approve/Reject links. At least 32 characters. Generate with `python -c "import secrets; print(secrets.token_urlsafe(32))"` | none: sending returns `503` |
+| `APPROVAL_LINK_DAYS` | How long Approve/Reject links work (whole days, 1 to 30) | `7` |
+| `APPROVAL_REMINDER_DAYS` | Days without a decision before a ticket is ready to send again as a Reminder (whole days, 1 to 30) | `1` |
+| `APPROVAL_EMAIL_LOG_PATH` | Where each sent approval email is logged (`ticket_id,sent_at,kind`) | `data/approval_emails.csv` |
 | `TICKETS_DATA_PATH` | `/tickets` and `/summary` | `data/helpdesk_export_sample.csv` |
 | `HELPDESK_EXPORT_PATH` | Escalation pages | `data/helpdesk_export_sample.csv` |
 | `ESCALATION_TRACKER_PATH` | Escalation pages | `data/escalation_tracker_sample.csv` |
 | `DECISION_LOG_PATH`, `APPROVAL_REQUEST_LOG_PATH` | Where decisions and requests are saved | `data/decision_log.csv`, `data/approval_requests.csv` |
 | `MANAGERS` | Comma-separated approvers for the per-ticket form | the approvers named in the tracker |
 
-The two log files are created on first use and are not in Git. The Help Desk export and the tracker are only read.
+The three log files are created on first use and are not in Git. The Help Desk export and the tracker are only read. Invalid day settings fall back to the default with a warning in the backend log; an invalid `PUBLIC_BASE_URL` or a too-short secret is ignored with a warning (the value is never logged).
 
 **Frontend:** copy `frontend/.env.example` to `frontend/.env`. Keep `VITE_API_BASE_URL=http://127.0.0.1:8000` for local use. The value is read when `npm run dev` starts, so restart it after a change. Only `VITE_API_BASE_URL` belongs here. Email and SMTP settings go in the backend `.env`, never in `frontend/.env`.
 
@@ -117,9 +122,26 @@ SMTP_USE_TLS=true
 
 To test without sending real email, run a local server that prints messages instead (`pip install aiosmtpd`, then `python -m aiosmtpd -n -l localhost:1025`) and set `SMTP_HOST=localhost`, `SMTP_PORT=1025`, `SMTP_USE_TLS=false`, with no username or password.
 
+### Approve/Reject buttons: run with ngrok
+
+The buttons in the email open a page served by this backend, so the manager's phone or laptop must be able to reach it. On a developer laptop, ngrok's free dev domain gives it a public `https://` address.
+
+1. Create a free account at ngrok.com, install ngrok, and run `ngrok config add-authtoken <token>` once.
+2. Copy your free dev domain from the ngrok dashboard (Domains).
+3. Start the backend: `python -m uvicorn app.main:app --reload --port 8000`.
+4. In another terminal, run `ngrok http 8000 --url https://<your-dev-domain>`.
+5. Set `PUBLIC_BASE_URL=https://<your-dev-domain>` and `APPROVAL_LINK_SECRET` in `.env`, then restart the backend.
+6. Check `https://<your-dev-domain>/health` (or `/approvals/config`) opens on your phone.
+
+Notes:
+
+- On ngrok's free plan, the first click shows an ngrok notice page. Click **Visit Site**; it won't appear again for 7 days.
+- The laptop, backend and ngrok must be running when the manager clicks. If they are not, the link does not open and nothing is recorded; the next reminder brings fresh links.
+- Changing `APPROVAL_LINK_SECRET` makes every link already sent invalid.
+
 ### Security
 
-Never commit, zip, or share `.env` or `frontend/.env`. Git already ignores them; check before zipping the folder by hand. If a `.env` was shared, create a new Gmail App Password and a new Gemini key, and delete the old ones. The API never returns these values, and `/health` reports only `configured` or `not_configured`.
+Never commit, zip, or share `.env` or `frontend/.env`. Git already ignores them; check before zipping the folder by hand. If a `.env` was shared, create a new Gmail App Password, a new Gemini key and a new `APPROVAL_LINK_SECRET`, and delete the old ones. The API never returns these values, and `/health` reports only `configured` or `not_configured`.
 
 ## Features
 
@@ -133,22 +155,19 @@ Shows the urgent open tickets and where each is in manager approval: not request
 
 ### Escalation Dashboard and the email round trip (`http://localhost:5173/#/dashboard`)
 
-The dashboard shows counts of open tickets needing attention (urgent & open, escalated label, refund over 200), the next approval email, and every ticket from the export. Customer email addresses never appear. The email settings above are needed to send.
+The dashboard shows counts of open tickets needing attention (urgent & open, escalated label, refund over 200), the tickets ready to send, the tickets waiting for the manager, the manager's recorded decisions, and every ticket from the export (open tickets first) with its approval state. Customer email addresses never appear. The email settings and the button settings above are needed to send. The page reloads itself every minute while it is visible, and **Refresh** reloads it now.
 
-1. Under **Escalations awaiting manager approval**, check the tickets and use **Preview email** to see exactly what will be sent.
-2. Click **Send to manager for approval**. Tickets not yet requested are saved as requested and move to "awaiting decision". Tickets already awaiting are included as reminders.
-3. The manager replies to the email with one line per ticket:
+The round trip:
 
-   ```
-   TCK-5007 APPROVE
-   TCK-5050 REJECT
-   ```
+1. Under **Escalations awaiting manager approval**, **Ready to send** lists each ticket as **New** or **Reminder · waiting N days**. **Preview email** shows exactly what will be sent.
+2. Click **Send to manager for approval**. One email goes to the manager, with an **Approve** and a **Reject** button for each ticket.
+3. The manager clicks **Approve** or **Reject**. A page opens on this backend showing the ticket and asking them to confirm. Opening the page records nothing.
+4. The manager clicks **Confirm**. The decision is recorded with the manager as the decider and appears under **Manager decisions** on the dashboard (within a minute, or at once with **Refresh**).
+5. A short result email ("TCK-5007 approved by Mara") goes to you, with the manager in Cc.
 
-   Writing APPROVE or REJECT after `Decision:` under each ticket in the quoted email also works. Words understood (any case): approve, approved, accept, accepted, ok, yes; reject, rejected, decline, declined, no.
-4. Paste the whole reply into **Record manager's reply** and click **Check reply**. Nothing is saved yet. The table shows what was understood for each ticket and why.
-5. Click **Record decisions**. Clear decisions are saved with the manager as the decider. Blank or unclear tickets stay awaiting and go in the next email. Tickets already decided are never changed.
+If the manager does not click: the ticket moves to **Waiting for the manager's reply**. After 1 day (`APPROVAL_REMINDER_DAYS`) it comes back to **Ready to send** as a Reminder, with fresh links, and this repeats until the manager decides. Accepted and rejected tickets never come back, and a ticket can only be decided once.
 
-The parsing rules are in [docs/TASK5_ESCALATIONS.md](docs/TASK5_ESCALATIONS.md).
+Replies to the email are not recorded. The old paste-reply endpoints (`/approvals/reply/preview` and `/approvals/reply/record`) still work for compatibility, but the dashboard no longer uses them. The rules are in [docs/TASK5_ESCALATIONS.md](docs/TASK5_ESCALATIONS.md).
 
 ## API endpoints
 
@@ -166,12 +185,14 @@ The parsing rules are in [docs/TASK5_ESCALATIONS.md](docs/TASK5_ESCALATIONS.md).
 | POST | `/escalations/{ticket_id}/decision` | `{"decision": "Accept" or "Reject", "decided_by"}` |
 | GET | `/approvals/urgent-open` | Urgent open tickets by approval stage. Filters: `category`, `status` |
 | POST | `/approvals/{ticket_id}/request` | `{"requested_by", "approver"}` |
-| GET | `/dashboard` | Dashboard data: tickets, attention counts, next approval batch |
-| GET | `/approvals/config` | Sender and manager names and whether email is configured (no addresses) |
-| GET | `/approvals/batch/preview` | Subject and body of the next approval email |
+| GET | `/dashboard` | Dashboard data: tickets (open first), attention counts, tickets ready to send, waiting tickets, recent decisions |
+| GET | `/approvals/config` | Sender and manager names, whether email and buttons are configured, and the names of missing button settings (no addresses or values) |
+| GET | `/approvals/batch/preview` | Subject, text body and HTML body of the next approval email |
 | POST | `/approvals/batch/send` | Send the approval email |
-| POST | `/approvals/reply/preview` | `{"reply_text"}` → decisions understood. Saves nothing |
-| POST | `/approvals/reply/record` | `{"reply_text"}` → records the clear decisions |
+| GET | `/approvals/respond?token=…` | HTML confirmation page opened by an email button. Records nothing |
+| POST | `/approvals/respond?token=…` | Confirm: records the decision as the manager and sends the result email (HTML page) |
+| POST | `/approvals/reply/preview` | `{"reply_text"}` → decisions understood. Saves nothing. Kept for compatibility |
+| POST | `/approvals/reply/record` | `{"reply_text"}` → records the clear decisions. Kept for compatibility |
 
 ## Errors and health check
 
@@ -241,6 +262,9 @@ If the frontend URL changes, add it to `ALLOWED_ORIGINS` in `app/main.py`. On Re
 - **The pages show old data or are missing features**: check the backend was started from this project folder and not an older copy. Stop any other `uvicorn` on port 8000.
 - **Blocked by CORS policy**: open the frontend at `http://localhost:5173` or `http://127.0.0.1:5173`. Private network addresses (`192.168.x.x`, `10.x.x.x`) on ports 5173, 4173, and 3000 are also allowed.
 - **Dashboard says the user and manager are not configured**: the `APPROVAL_*` settings must be in the backend `.env` in the project folder, not in `frontend/.env`. Restart the backend afterwards.
+- **"Email approval is not configured: PUBLIC_BASE_URL is not set" (503)** (or `APPROVAL_LINK_SECRET`): add it to the backend `.env` and restart. Check the backend log for a warning if it is set but ignored (wrong prefix, or a secret under 32 characters).
+- **The manager's button says "This link is not valid"**: the secret changed since the email was sent, or the link was cut. Send again when the reminder is due.
+- **"Nothing to send yet"** (409): every ticket was emailed recently; it comes back as a Reminder when the date shown is reached.
 - **"Approval email could not be sent" (502)**: the backend terminal shows the reason. For Gmail, check that `SMTP_USERNAME` is the sending address and `SMTP_PASSWORD` is an App Password, not the normal password.
 - **"Could not save to … Close it if it is open in Excel"**: close the log file in Excel and try again.
 - **Port 8000 or 5173 already in use**: stop the other process, or start on another port (`--port 8001`) and update `VITE_API_BASE_URL` to match.
