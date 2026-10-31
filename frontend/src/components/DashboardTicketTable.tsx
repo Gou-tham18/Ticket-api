@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { DashboardTicket, Indicator } from '../types/dashboard';
+import { Decision } from '../types/escalation';
 
 export const INDICATOR_LABELS: Record<Indicator, string> = {
   urgent_open: 'Urgent & open',
@@ -24,6 +25,47 @@ export function formatCreated(value: string): string {
   return `${day}/${month}/${year} ${hour}:${minute}`;
 }
 
+/** "2026-10-05 13:05" -> "05/10/2026". Other values are shown as-is. */
+export function formatDay(value: string): string {
+  return formatCreated(value).split(' ')[0];
+}
+
+export const DECISION_LABELS: Record<Decision, string> = {
+  Accept: 'Accepted',
+  Reject: 'Rejected',
+};
+
+// The badge always carries the word, so the decision is not told by colour alone.
+export const DecisionBadge: React.FC<{ decision: Decision }> = ({ decision }) => (
+  <span className={`stage-badge ${decision === 'Accept' ? 'stage-accepted' : 'stage-rejected'}`}>
+    {DECISION_LABELS[decision]}
+  </span>
+);
+
+const ApprovalCell: React.FC<{ ticket: DashboardTicket }> = ({ ticket }) => {
+  if (ticket.decision) {
+    const by = [
+      ticket.decided_by ? `by ${ticket.decided_by}` : null,
+      ticket.decided_at ? formatDay(ticket.decided_at) : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    return (
+      <>
+        <DecisionBadge decision={ticket.decision} />
+        {by && <span className="stage-detail">{by}</span>}
+      </>
+    );
+  }
+  if (ticket.approval_stage === 'awaiting_decision') {
+    return <span className="stage-badge stage-awaiting_decision">Awaiting decision</span>;
+  }
+  if (ticket.approval_stage === 'not_requested') {
+    return <span className="stage-badge stage-not_requested">Not requested</span>;
+  }
+  return <span className="muted-text">—</span>;
+};
+
 export const IndicatorBadge: React.FC<{ indicator: Indicator }> = ({ indicator }) => (
   <span className={`indicator-badge indicator-${indicator}`}>
     <span className="indicator-icon" aria-hidden="true">
@@ -45,6 +87,7 @@ export const DashboardTicketTable: React.FC<DashboardTicketTableProps> = ({
   openCount,
 }) => {
   const [attentionOnly, setAttentionOnly] = useState(false);
+  // Rows keep the API's order (open first, then resolved), filtered or not.
   const shown = attentionOnly ? tickets.filter((t) => t.indicators.length > 0) : tickets;
 
   return (
@@ -85,6 +128,7 @@ export const DashboardTicketTable: React.FC<DashboardTicketTableProps> = ({
                 <th scope="col">Assigned to</th>
                 <th scope="col">Labels</th>
                 <th scope="col">Needs attention</th>
+                <th scope="col">Approval</th>
               </tr>
             </thead>
             <tbody>
@@ -128,6 +172,9 @@ export const DashboardTicketTable: React.FC<DashboardTicketTableProps> = ({
                     ) : (
                       <span className="muted-text">—</span>
                     )}
+                  </td>
+                  <td data-label="Approval" data-testid={`approval-${ticket.ticket_id}`}>
+                    <ApprovalCell ticket={ticket} />
                   </td>
                 </tr>
               ))}

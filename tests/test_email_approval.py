@@ -31,6 +31,8 @@ SETTINGS = ApprovalSettings(
     user_email="riya@example.org",
     manager_name="Mara",
     manager_email="mara@example.org",
+    public_base_url="https://approvals.example.org",
+    link_secret="test-link-secret-xxxxxxxxxxxxxxxxxxxxxxxx",
 )
 
 
@@ -150,6 +152,8 @@ def test_config_exposes_names_but_no_addresses(client):
         "manager_name": "Mara",
         "configured": True,
         "email_configured": True,
+        "buttons_configured": True,
+        "buttons_missing": [],
     }
     assert "@" not in json.dumps(body)
 
@@ -227,7 +231,11 @@ def test_dashboard_counts_match_the_sample_csv(client):
         "refund_over_200": len(refund),
         "any_condition": len(urgent | escalated | refund),
     }
-    assert [t["ticket_id"] for t in body["tickets"]] == [r["ticket_id"] for r in rows]
+    # Open tickets first, then resolved; the sample export is already oldest first.
+    resolved_rows = [r for r in rows if r not in open_rows]
+    assert [t["ticket_id"] for t in body["tickets"]] == [
+        r["ticket_id"] for r in open_rows + resolved_rows
+    ]
 
 
 def test_dashboard_never_contains_customer_email(client):
@@ -252,10 +260,18 @@ def test_dashboard_ticket_fields(client):
         "refund_amount": 199.0,
         "indicators": ["urgent_open", "escalated_label"],
         "approval_stage": "not_requested",
+        "decision": None,
+        "decided_by": None,
+        "decided_at": None,
+        "decision_source": None,
     }
-    # Refund over 200 but resolved: closed tickets carry no indicators.
+    # Refund over 200 but resolved: closed tickets carry no indicators, but
+    # escalated ones now show their approval stage and decision.
     assert tickets["TCK-5058"]["indicators"] == []
-    assert tickets["TCK-5058"]["approval_stage"] is None
+    assert tickets["TCK-5058"]["approval_stage"] == "accepted"
+    assert tickets["TCK-5058"]["decision"] == "Accept"
+    # Not escalated and not urgent: no stage.
+    assert tickets["TCK-5084"]["approval_stage"] is None
     assert tickets["TCK-5084"]["labels"] == []
     assert tickets["TCK-5084"]["refund_amount"] is None
 
@@ -288,14 +304,14 @@ def test_unreadable_refund_is_not_over_200_and_is_reported(tmp_path):
 # Approval batch and email ---------------------------------------------------
 
 
-def test_batch_on_sample_data_is_oldest_first_and_skips_decided(service):
+def test_batch_on_sample_data_is_new_then_reminders_oldest_first_and_skips_decided(service):
     batch = service.approval_batch()
 
-    assert [(t["ticket_id"], t["approval_stage"]) for t in batch] == [
-        ("TCK-5007", "awaiting_decision"),
-        ("TCK-5070", "not_requested"),
-        ("TCK-5110", "not_requested"),
-        ("TCK-5050", "awaiting_decision"),
+    assert [(t["ticket_id"], t["approval_stage"], t["send_reason"]) for t in batch] == [
+        ("TCK-5070", "not_requested", "new"),
+        ("TCK-5110", "not_requested", "new"),
+        ("TCK-5007", "awaiting_decision", "reminder"),
+        ("TCK-5050", "awaiting_decision", "reminder"),
     ]
 
 
@@ -311,7 +327,7 @@ def test_batch_matches_current_logs_where_tck_5070_was_accepted(paths):
     )
     batch = make_service(paths).approval_batch()
 
-    assert [t["ticket_id"] for t in batch] == ["TCK-5007", "TCK-5110", "TCK-5050"]
+    assert [t["ticket_id"] for t in batch] == ["TCK-5110", "TCK-5007", "TCK-5050"]
 
 
 def test_dashboard_batch_reports_fields_saved(client):
@@ -326,21 +342,26 @@ def test_email_preview_format(client, paths):
 
     assert body["to"] == "Mara"
     assert body["from"] == "Riya"
-    assert body["subject"] == "Urgent tickets awaiting your approval (4)"
-    assert body["ticket_ids"] == ["TCK-5007", "TCK-5070", "TCK-5110", "TCK-5050"]
+    assert body["subject"] == "Urgent tickets awaiting your approval (4, including 2 reminders)"
+    assert body["ticket_ids"] == ["TCK-5070", "TCK-5110", "TCK-5007", "TCK-5050"]
+    assert body["body"] == body["text_body"]
     lines = body["body"].splitlines()
     assert lines[0] == "Hi Mara,"
-    assert 'APPROVE or REJECT after "Decision:"' in lines[2]
+    assert lines[2].startswith("Click Approve or Reject for each ticket.")
     assert lines[4] == (
-        "TCK-5007 | Refunds | urgent | created 05/10/2026 13:05 | in_progress"
-        " | assigned to riya | labels escalated | refund 480.00"
-    )
-    assert lines[5] == "Decision:"
-    assert (
         "TCK-5070 | Shipping | urgent | created 11/10/2026 10:49 | in_progress"
         " | assigned to ken | labels escalated | refund —"
+    )
+    assert lines[5].startswith("Approve: https://approvals.example.org/approvals/respond?token=")
+    assert lines[6].startswith("Reject: https://approvals.example.org/approvals/respond?token=")
+    assert (
+        "TCK-5007 | Refunds | urgent | created 05/10/2026 13:05 | in_progress"
+        " | assigned to riya | labels escalated | refund 480.00"
     ) in lines
-    assert lines[-1] == "Sent by Riya from the Escalation Dashboard."
+    assert "Decision:" not in body["body"]
+    assert lines[-1] == (
+        "Links work until 27/10/2026. Sent by Riya from the Escalation Dashboard."
+    )
     assert "@" not in json.dumps(body)
     # Preview writes nothing.
     assert not paths["requests"].exists()
@@ -362,9 +383,10 @@ def test_send_requests_only_not_requested_tickets(client, sender, paths):
     assert response.status_code == 200
     assert response.json() == {
         "sent": True,
-        "ticket_ids": ["TCK-5007", "TCK-5070", "TCK-5110", "TCK-5050"],
+        "ticket_ids": ["TCK-5070", "TCK-5110", "TCK-5007", "TCK-5050"],
         "newly_requested": ["TCK-5070", "TCK-5110"],
         "reminders": ["TCK-5007", "TCK-5050"],
+        "next_reminder_due_at": "2026-10-21 09:15",
     }
     rows = read_rows(paths["requests"])
     assert [(r["ticket_id"], r["requested_by"], r["approver"]) for r in rows] == [
@@ -376,8 +398,9 @@ def test_send_requests_only_not_requested_tickets(client, sender, paths):
     assert message["To"] == "Mara <mara@example.org>"
     assert message["From"] == "Riya <riya@example.org>"
     assert message["Reply-To"] == "riya@example.org"
-    assert message["Subject"] == "Urgent tickets awaiting your approval (4)"
-    assert "@example.com" not in message.get_content()
+    assert message["Subject"] == "Urgent tickets awaiting your approval (4, including 2 reminders)"
+    for part in message.iter_parts():
+        assert "@example.com" not in part.get_content()
 
     stages = {
         t["ticket_id"]: t["approval_stage"]
@@ -386,12 +409,17 @@ def test_send_requests_only_not_requested_tickets(client, sender, paths):
     assert stages["TCK-5070"] == stages["TCK-5110"] == "awaiting_decision"
 
 
-def test_second_send_is_reminders_only(client, paths):
+def test_second_send_straight_away_has_nothing_to_send(client, sender, paths):
+    # Every ticket was just emailed, so none is due for a reminder yet.
     client.post("/approvals/batch/send")
-    body = client.post("/approvals/batch/send").json()
+    response = client.post("/approvals/batch/send")
 
-    assert body["newly_requested"] == []
-    assert body["reminders"] == ["TCK-5007", "TCK-5070", "TCK-5110", "TCK-5050"]
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Nothing to send yet. 4 tickets are waiting for the manager's reply; "
+        "the next reminder is due 21/10/2026."
+    )
+    assert len(sender.sent) == 1
     assert len(read_rows(paths["requests"])) == 2
 
 

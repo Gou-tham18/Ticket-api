@@ -983,31 +983,32 @@
   margin-top: 0.5rem;
 }
 
-.reply-textarea {
-  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
-  font-size: 0.85rem;
-  resize: vertical;
+.email-preview-frame {
+  width: 100%;
+  min-height: 28rem;
+  margin-top: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: #ffffff;
 }
 
-.reply-results {
-  margin-top: 1rem;
-}
-
-.reply-status {
-  display: inline-block;
-  font-size: 0.8rem;
+.subsection-title {
+  font-size: 1rem;
   font-weight: 700;
-  padding: 0.15rem 0.5rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid #64748b;
-  color: #334155;
-  background-color: #f1f5f9;
+  margin: 1rem 0 0.5rem;
 }
 
-.reply-status-accept { border-color: #15803d; color: #166534; background-color: #f0fdf4; }
-.reply-status-reject { border-color: #b91c1c; color: #991b1b; background-color: #fef2f2; }
-.reply-status-unclear,
-.reply-status-not_found { border-color: #d97706; color: #92400e; background-color: #fffbeb; }
+.dashboard-intro-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.dashboard-intro-row p {
+  flex: 1 1 20rem;
+}
 
 .status-badge {
   display: inline-block;

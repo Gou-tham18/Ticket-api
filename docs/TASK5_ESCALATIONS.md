@@ -164,6 +164,62 @@ On the sample data: 120 tickets, 79 open, 10 urgent open, 23 with an escalated l
 
 `approval_stage()` reported `not_requested` for a ticket that had a final decision but no tracker row, for example a tagged ticket decided with `POST /escalations/{id}/decision`, even though its state was `accepted` or `rejected`. A final decision now wins: `accepted`/`rejected` first, then `not_requested` if the ticket was never requested, then `awaiting_decision`. A regression test covers it.
 
+## Approval buttons
+
+Added after the email round trip. The manager no longer writes a reply and the team no longer pastes it: each ticket in the email has an **Approve** and a **Reject** button. Sending stays manual (the user clicks **Send to manager for approval**). The paste-reply endpoints still work and are still tested, but the dashboard no longer uses them, and the "Record manager's reply" section was removed.
+
+New module `app/approval_links.py` (tokens) and `app/approval_pages.py` (pages); new routes in `app/main.py`.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/approvals/respond?token=…` | Confirmation page. Records nothing |
+| POST | `/approvals/respond?token=…` | Confirm. Records the decision as the manager, then sends the result email |
+
+### Link design
+
+- **Signed.** A token is `base64url(payload).base64url(signature)` without padding, about 70 characters. The payload is `ticket_id|A or R|expires_at` (Unix seconds); the signature is HMAC-SHA256 with `APPROVAL_LINK_SECRET`, checked with `hmac.compare_digest`. Changing the ticket, the decision or the expiry, or signing with another secret, makes the link invalid. Characters outside the base64url alphabet are rejected before decoding.
+- **Expiring.** `expires_at` = send time + `APPROVAL_LINK_DAYS` (default 7). The email footer says "Links work until DD/MM/YYYY."
+- **Link:** `{PUBLIC_BASE_URL}/approvals/respond?token=<token>`. `PUBLIC_BASE_URL` is the ngrok dev domain when the backend runs on a laptop (see the README).
+- **Why GET never records.** Email security scanners and mail clients such as Gmail open links automatically to check them. If opening a link recorded a decision, a scanner could approve a ticket nobody looked at. GET only shows the ticket and a **Confirm** button. Confirm is a `<form method="post">` back to the same URL, with the token in the query string and no form fields, so no form-parsing library is needed.
+- **Checks on both GET and POST**, in order: not set up (no secret or manager name, `503`); invalid (`400`); expired (`410`, or `409` "already decided" if the ticket was decided meanwhile); ticket not in the export, no longer urgent and open, or never sent for approval ("no decision needed": `200` on GET, `409` on POST); already decided (`409`, "TCK-5007 was already approved by Ajith on 30/10/2026 10:39."). Otherwise GET shows the confirmation (`200`) and POST records with the existing `record_decision(ticket_id, decision, APPROVAL_MANAGER_NAME)`.
+- **Decided once.** The existing "already decided" rule applies: a second Confirm, or the other button after a decision, shows the "already decided" page and records nothing.
+- **Pages** are plain HTML built in Python with inline CSS, no JavaScript, and a mobile viewport. Every value is escaped. They never show the token, the secret, email addresses or file paths. Errors on these routes (missing export, locked log, unexpected error) are also friendly HTML pages, never JSON. Every response has `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex`.
+
+### The approval email
+
+`multipart/alternative`: an HTML part and a plain-text fallback. Subject `Urgent tickets awaiting your approval (N)`, or `(N, including M reminders)`. Each ticket has the eight-field summary line, a "Reminder: first sent DD/MM/YYYY, waiting N days" line for reminders, and green **Approve** / red **Reject** buttons (a table with inline CSS). The text part has `Approve: <url>` and `Reject: <url>` lines instead. The `Decision:` lines and the "write APPROVE or REJECT" instruction are gone. From, To and Reply-To are unchanged.
+
+Sending needs the user and manager names and addresses, SMTP, `PUBLIC_BASE_URL` and `APPROVAL_LINK_SECRET`; a missing one gives `503` naming it. `/approvals/config` adds `buttons_configured` and `buttons_missing` (setting names only), and `email_configured` is false unless the buttons are configured too. `/approvals/batch/preview` adds `text_body` and `html_body` (`body` stays, equal to the text body) and uses the same kind of links that would be sent.
+
+After a successful send only: new tickets are requested with the existing `request_approval()`, and one row per ticket is appended to `data/approval_emails.csv` (`ticket_id,sent_at,kind`, kind `new` or `reminder`, one `sent_at` for the whole email) in a single write. The log is checked before sending, so a locked log stops the email. If the send fails, nothing is written. The response adds `next_reminder_due_at`.
+
+### Result email
+
+After a decision is recorded through the confirmation page, one short email goes from the user to the user, with the manager in Cc. Subject `TCK-5007 approved by Ajith` (or `rejected`); body "Ajith approved TCK-5007 on 30/10/2026 at 10:39." plus the ticket's summary line, in text and HTML. If it fails, the decision stays recorded, a warning without secrets is logged, and the page adds "Your decision is saved, but the confirmation email could not be sent." A notification never undoes a decision.
+
+### Reminder rule
+
+A ticket's last-emailed time is its latest `sent_at` in `approval_emails.csv`, otherwise its `requested_at` in the tracker or `approval_requests.csv`. So old tracker requests count as emailed at their tracker date.
+
+| Ticket | Ready to send? |
+|---|---|
+| Urgent, open/in_progress, `not_requested` | Yes, as **New** |
+| Urgent, open/in_progress, `awaiting_decision`, last emailed at least `APPROVAL_REMINDER_DAYS` × 24 h ago | Yes, as **Reminder** |
+| Urgent, open/in_progress, `awaiting_decision`, emailed more recently | No. Listed under "Waiting for the manager's reply" with when it comes back |
+| `accepted` or `rejected` | Never |
+
+New tickets come first, then reminders, each oldest first by `created_at`. With the default of 1 day, a ticket sent at 09:15 is not ready at 09:14 the next day and is ready at 09:15. If nothing is ready, sending returns `409`: "Nothing to send yet. N tickets are waiting for the manager's reply; the next reminder is due DD/MM/YYYY." or "No urgent open tickets need a decision."
+
+### When the laptop is off
+
+The link points at the laptop through ngrok. If the laptop, the backend or ngrok is not running when the manager clicks, the link does not open and nothing is recorded. The ticket stays awaiting a decision, comes back as a Reminder after `APPROVAL_REMINDER_DAYS`, and the next email has fresh links. Links in older emails keep working until they expire, as long as the backend is reachable.
+
+### Dashboard data
+
+`GET /dashboard` only adds fields: `reminder_days`, `link_days`, `waiting_for_reply` (`ticket_id`, `category`, `summary_line`, `last_emailed_at`, `reminder_due_at`, soonest due first), `next_reminder_due_at`, and `recent_decisions` (decisions recorded through the app in `decision_log.csv`, newest first, at most 20). Every ticket gains `decision`, `decided_by`, `decided_at` and `decision_source`, and `approval_stage` is now set for every escalated ticket, not only urgent open ones. Batch tickets gain `send_reason`, `last_emailed_at`, `first_requested_at` and `days_waiting`. `tickets` is sorted open first (`open`, `in_progress`), then resolved (`resolved`, `closed`), each oldest first; counts are unchanged.
+
+On the supplied sample data with the current logs, all four tickets that were waiting (TCK-5007, TCK-5050, TCK-5070, TCK-5110) are decided in `data/decision_log.csv`, so nothing is ready to send and nothing is waiting: the dashboard says "No urgent open tickets need a decision."
+
 ## Production basics
 
 Added in Task 6. Behaviour of the dashboard, approval email, and reply reading is unchanged.
@@ -200,7 +256,7 @@ The existing triage `502`/`503`, email `502`/`503` and `404`/`409`/`422` respons
 
 ## Tests
 
-`tests/test_escalations.py` has 69 tests, `tests/test_email_approval.py` has 61, and `tests/test_production.py` (Task 6: errors, validation, `/health`) has 64, for 222 in total across the backend. The email tests use copies of the sample files in a temporary folder and a fake email sender, so they never open a network connection or write to `data/`. They cover decision and tag normalisation, day-first dates, open versus resolved status, joining the tracker to the export, duplicate and orphan handling, recording decisions, persistence across a restart, the source files staying untouched, every API error path, the urgent-open analysis, and manager approval requests. Four tests run against the supplied sample files and check the exact counts and issues listed above.
+`tests/test_escalations.py` has 69 tests, `tests/test_email_approval.py` has 61, `tests/test_production.py` (Task 6: errors, validation, `/health`) has 64, and `tests/test_approval_buttons.py` (links, confirmation pages, result email, reminders, dashboard fields, config) has 89, for 311 in total across the backend. The button tests use a fake clock that the test moves forward, so reminder timing is checked to the minute. The email tests use copies of the sample files in a temporary folder and a fake email sender, so they never open a network connection or write to `data/`. They cover decision and tag normalisation, day-first dates, open versus resolved status, joining the tracker to the export, duplicate and orphan handling, recording decisions, persistence across a restart, the source files staying untouched, every API error path, the urgent-open analysis, and manager approval requests. Four tests run against the supplied sample files and check the exact counts and issues listed above.
 
 ```
 python -m pytest -q
@@ -215,7 +271,11 @@ python -m pytest -q
 - Decisions recorded here are not written back to the tracker spreadsheet, so the two can drift until someone reconciles them.
 - The decision log is a local file and is not safe for several server processes at once. It is fine for a single-process prototype.
 - A recorded decision cannot be changed or undone through the API.
-- The approval email is sent from the dashboard, but replies are not read from the inbox. The user pastes the manager's reply. The per-ticket **Request Approval** on the Escalation Tracker page still only records the request and sends no email.
+- The manager answers with the buttons in the email; replies to the email are not read or recorded. The per-ticket **Request Approval** on the Escalation Tracker page still only records the request and sends no email.
+- **The backend must be running and reachable to accept clicks.** On a laptop that means the laptop, the backend and ngrok are all running. A click while it is off does nothing; the reminder brings fresh links.
+- **Decisions are stored in CSV** (`decision_log.csv`, `approval_requests.csv`, `approval_emails.csv`), on the same machine, with the limits above.
+- **No login.** Anyone holding a valid link can make that one decision until it expires. That is why links are signed, expire after `APPROVAL_LINK_DAYS`, need an explicit Confirm, and are only emailed to the manager. A forwarded email forwards that power. Changing `APPROVAL_LINK_SECRET` cancels every link already sent.
+- Reminders are not sent automatically: a ticket comes back to "Ready to send" and the user still clicks Send.
 - There is one fixed user and one fixed manager, set in `.env`. Changing them needs a backend restart.
 - The reply parser needs the ticket IDs in the reply. A manager who writes "approve all" with the original not quoted gets `422`.
 - No notifications or Help Desk integration.
@@ -228,7 +288,7 @@ python -m pytest -q
 3. What should happen with `Need more info`? The prototype treats it as still pending.
 4. In the tracker, is `approver` the person who decided, or the person who was asked?
 5. Is "know the moment something is escalated" needed for the first version? If yes, by what channel?
-6. **Answered by the email round trip:** managers reply to the approval email, and the user pastes the reply into the dashboard. Should the reply eventually be read from a shared inbox automatically?
+6. **Answered by the approval buttons:** managers click Approve or Reject in the email and confirm on a page; nothing is pasted.
 7. Should decisions recorded here be written back to the tracker, or should the tracker eventually be replaced by this log?
 8. Should a decision ever be changed after it is recorded?
 9. What should happen to escalations still pending on tickets that are already resolved or closed?

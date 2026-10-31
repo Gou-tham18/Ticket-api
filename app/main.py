@@ -4,31 +4,45 @@ import logging
 import os
 import threading
 import uuid
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
-from typing import Annotated, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi import Path as PathParam
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from pydantic_core import PydanticCustomError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app import approval_pages as pages
 from app.approval_email import (
+    DATE_FORMAT,
     SmtpEmailSender,
     SmtpSettings,
     build_approval_email,
     build_message,
+    build_result_email,
+    build_result_message,
+    plural,
+)
+from app.approval_links import (
+    DECISION_CODES,
+    ExpiredLink,
+    InvalidLink,
+    link_for,
+    make_token,
+    read_token,
 )
 from app.approval_reply import NoTicketsInReply
 from app.escalations import (
+    DEFAULT_REMINDER_DAYS,
     AlreadyDecided,
     AlreadyRequested,
     EscalationService,
@@ -65,6 +79,13 @@ WEB_DIR = PROJECT_ROOT / "web"
 
 app = FastAPI(title="ticket-api")
 
+# The page the manager reaches from the email. Its errors are HTML, never JSON.
+RESPOND_PATH = "/approvals/respond"
+
+
+def _page_response(content: str, status_code: int = 200) -> HTMLResponse:
+    return HTMLResponse(content, status_code=status_code, headers=pages.PAGE_HEADERS)
+
 UNEXPECTED_ERROR_MESSAGE = (
     "Something went wrong on the server. Please try again, and if it keeps "
     "happening, report the time and this error ID."
@@ -84,6 +105,8 @@ async def catch_unexpected_errors(request: Request, call_next):
         logger.exception(
             "Unexpected error %s on %s %s", error_id, request.method, request.url.path
         )
+        if request.url.path == RESPOND_PATH:
+            return _page_response(pages.error_page(), 500)
         return JSONResponse(
             status_code=500,
             content={"detail": UNEXPECTED_ERROR_MESSAGE, "error_id": error_id},
@@ -183,12 +206,17 @@ HELPDESK_PRIORITIES = ("urgent", "high", "normal", "low")
 
 @app.exception_handler(SourceFileError)
 def source_file_error(request: Request, exc: SourceFileError):
+    if request.url.path == RESPOND_PATH:
+        logger.error("Approval page unavailable: %s", exc)
+        return _page_response(pages.unavailable_page(), 503)
     return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 @app.exception_handler(LogWriteError)
 def log_write_error(request: Request, exc: LogWriteError):
     logger.error("Could not write %s: %s", exc.file_name, exc.__cause__)
+    if request.url.path == RESPOND_PATH:
+        return _page_response(pages.not_saved_page(), 503)
     return JSONResponse(status_code=503, content={"detail": exc.user_message()})
 
 
@@ -403,7 +431,7 @@ APPROVAL_REQUEST_LOG_PATH = os.environ.get(
 MANAGERS = [m for m in os.environ.get("MANAGERS", "").split(",") if m.strip()]
 
 # Email approval round trip: one fixed team member sends urgent tickets to
-# one fixed manager and pastes the manager's reply back into the dashboard.
+# one fixed manager, who answers with the Approve/Reject buttons in the email.
 APPROVAL_USER_NAME = os.environ.get("APPROVAL_USER_NAME", "").strip()
 APPROVAL_USER_EMAIL = os.environ.get("APPROVAL_USER_EMAIL", "").strip()
 APPROVAL_MANAGER_NAME = os.environ.get("APPROVAL_MANAGER_NAME", "").strip()
@@ -416,6 +444,71 @@ SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "").strip()
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").strip().lower() not in (
     "false", "0", "no",
+)
+
+# Approve/Reject buttons in the email.
+DEFAULT_LINK_DAYS = 7
+MAX_SETTING_DAYS = 30
+MIN_LINK_SECRET_LENGTH = 32
+
+
+def day_setting(name: str, raw: Optional[str], default: int) -> int:
+    """A whole number of days from 1 to 30. Anything else falls back to the
+    default with a warning; the value itself is not logged."""
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        value = 0
+    if 1 <= value <= MAX_SETTING_DAYS:
+        return value
+    logger.warning(
+        "%s must be a whole number from 1 to %d; using the default %d.",
+        name, MAX_SETTING_DAYS, default,
+    )
+    return default
+
+
+def public_base_url_setting(raw: str) -> str:
+    """https://... (or http://... for local testing), without a trailing /."""
+    value = raw.strip().rstrip("/")
+    if not value:
+        return ""
+    if not value.lower().startswith(("https://", "http://")) or "://" == value[-3:]:
+        logger.warning(
+            "PUBLIC_BASE_URL must start with https:// (or http:// for local "
+            "testing); it is ignored."
+        )
+        return ""
+    if value.lower().startswith("http://"):
+        logger.warning("PUBLIC_BASE_URL uses http://. Use https:// outside local testing.")
+    return value
+
+
+def link_secret_setting(raw: str) -> str:
+    value = raw.strip()
+    if value and len(value) < MIN_LINK_SECRET_LENGTH:
+        logger.warning(
+            "APPROVAL_LINK_SECRET must be at least %d characters; it is ignored.",
+            MIN_LINK_SECRET_LENGTH,
+        )
+        return ""
+    return value
+
+
+PUBLIC_BASE_URL = public_base_url_setting(os.environ.get("PUBLIC_BASE_URL", ""))
+# Never returned by the API, shown on a page, or written to the log.
+APPROVAL_LINK_SECRET = link_secret_setting(os.environ.get("APPROVAL_LINK_SECRET", ""))
+APPROVAL_LINK_DAYS = day_setting(
+    "APPROVAL_LINK_DAYS", os.environ.get("APPROVAL_LINK_DAYS"), DEFAULT_LINK_DAYS
+)
+APPROVAL_REMINDER_DAYS = day_setting(
+    "APPROVAL_REMINDER_DAYS", os.environ.get("APPROVAL_REMINDER_DAYS"), DEFAULT_REMINDER_DAYS
+)
+APPROVAL_EMAIL_LOG_PATH = os.environ.get(
+    "APPROVAL_EMAIL_LOG_PATH",
+    str(PROJECT_ROOT / "data" / "approval_emails.csv"),
 )
 
 _escalation_service: Optional[EscalationService] = None
@@ -431,6 +524,7 @@ def _escalation_files_signature_now():
         ESCALATION_TRACKER_PATH,
         DECISION_LOG_PATH,
         APPROVAL_REQUEST_LOG_PATH,
+        APPROVAL_EMAIL_LOG_PATH,
     ):
         try:
             signature.append(os.stat(path).st_mtime_ns)
@@ -453,6 +547,8 @@ def get_escalation_service() -> EscalationService:
                 request_log_path=APPROVAL_REQUEST_LOG_PATH,
                 managers=MANAGERS or None,
                 fixed_manager=APPROVAL_MANAGER_NAME or None,
+                email_log_path=APPROVAL_EMAIL_LOG_PATH,
+                reminder_days=APPROVAL_REMINDER_DAYS,
             )
             _escalation_files_signature = signature
         return _escalation_service
@@ -464,6 +560,9 @@ class ApprovalSettings:
     user_email: str
     manager_name: str
     manager_email: str
+    public_base_url: str = ""
+    link_secret: str = field(default="", repr=False)
+    link_days: int = DEFAULT_LINK_DAYS
 
     def missing_name_setting(self) -> Optional[str]:
         if not self.user_name:
@@ -479,6 +578,15 @@ class ApprovalSettings:
             return "APPROVAL_MANAGER_EMAIL"
         return None
 
+    def missing_link_settings(self) -> List[str]:
+        """Names of the button settings that are not set, never their values."""
+        missing = []
+        if not self.public_base_url:
+            missing.append("PUBLIC_BASE_URL")
+        if not self.link_secret:
+            missing.append("APPROVAL_LINK_SECRET")
+        return missing
+
 
 def get_approval_settings() -> ApprovalSettings:
     return ApprovalSettings(
@@ -486,6 +594,9 @@ def get_approval_settings() -> ApprovalSettings:
         user_email=APPROVAL_USER_EMAIL,
         manager_name=APPROVAL_MANAGER_NAME,
         manager_email=APPROVAL_MANAGER_EMAIL,
+        public_base_url=PUBLIC_BASE_URL,
+        link_secret=APPROVAL_LINK_SECRET,
+        link_days=APPROVAL_LINK_DAYS,
     )
 
 
@@ -565,7 +676,8 @@ def approval_config(
     settings: ApprovalSettings = Depends(get_approval_settings),
     sender: SmtpEmailSender = Depends(get_email_sender),
 ):
-    """Who sends and who approves. No addresses or SMTP details."""
+    """Who sends and who approves. No addresses, SMTP details or link values."""
+    buttons_missing = settings.missing_link_settings()
     return {
         "user_name": settings.user_name or None,
         "manager_name": settings.manager_name or None,
@@ -574,18 +686,68 @@ def approval_config(
             settings.missing_name_setting() is None
             and settings.missing_email_setting() is None
             and sender.missing_setting() is None
+            and not buttons_missing
         ),
+        "buttons_configured": not buttons_missing,
+        # Setting names only, so the dashboard can say what to add.
+        "buttons_missing": buttons_missing,
     }
 
 
 @app.get("/dashboard")
-def dashboard(service: EscalationService = Depends(get_escalation_service)):
-    return service.dashboard()
+def dashboard(
+    service: EscalationService = Depends(get_escalation_service),
+    settings: ApprovalSettings = Depends(get_approval_settings),
+):
+    return {**service.dashboard(), "link_days": settings.link_days}
 
 
-def _batch_email(service: EscalationService, settings: ApprovalSettings) -> dict:
+def require_link_settings(settings: ApprovalSettings) -> None:
+    missing = settings.missing_link_settings()
+    if missing:
+        raise _not_configured(missing[0])
+
+
+def _batch_email(settings: ApprovalSettings, batch: list, sent_at: datetime) -> dict:
+    """The approval email with a signed Approve and Reject link per ticket."""
+    expires_at = sent_at + timedelta(days=settings.link_days)
+    links = {
+        ticket["ticket_id"]: {
+            decision: link_for(
+                settings.public_base_url,
+                make_token(ticket["ticket_id"], decision, expires_at, settings.link_secret),
+            )
+            for decision in DECISION_CODES
+        }
+        for ticket in batch
+    }
     return build_approval_email(
-        service.approval_batch(), settings.user_name, settings.manager_name
+        batch, settings.user_name, settings.manager_name, links, expires_at
+    )
+
+
+def _safe_error(exc: Exception) -> str:
+    """Exception type and message with any secret masked, for the log."""
+    detail = f"{type(exc).__name__}: {exc}"
+    for secret in (SMTP_PASSWORD, APPROVAL_LINK_SECRET):
+        if secret:
+            detail = detail.replace(secret, "***")
+    return detail
+
+
+def _display_date(timestamp: str) -> str:
+    return parse_timestamp(timestamp).strftime(DATE_FORMAT)
+
+
+def _nothing_to_send(service: EscalationService) -> str:
+    waiting = service.waiting_for_reply()
+    if not waiting:
+        return "No urgent open tickets need a decision."
+    verb = "is" if len(waiting) == 1 else "are"
+    return (
+        f"Nothing to send yet. {plural(len(waiting), 'ticket')} {verb} waiting for "
+        "the manager's reply; the next reminder is due "
+        f"{_display_date(waiting[0]['reminder_due_at'])}."
     )
 
 
@@ -594,7 +756,9 @@ def approval_batch_preview(
     settings: ApprovalSettings = Depends(require_approval_names),
     service: EscalationService = Depends(get_escalation_service),
 ):
-    email = _batch_email(service, settings)
+    # The same links that would be sent now.
+    require_link_settings(settings)
+    email = _batch_email(settings, service.approval_batch(), service.clock())
     return {"to": settings.manager_name, "from": settings.user_name, **email}
 
 
@@ -607,13 +771,11 @@ def approval_batch_send(
     missing = settings.missing_email_setting()
     if missing:
         raise _not_configured(missing)
+    require_link_settings(settings)
 
     batch = service.approval_batch()
     if not batch:
-        raise HTTPException(
-            status_code=409,
-            detail="No urgent open tickets need a decision, so no email was sent.",
-        )
+        raise HTTPException(status_code=409, detail=_nothing_to_send(service))
 
     missing = sender.missing_setting()
     if missing:
@@ -621,10 +783,12 @@ def approval_batch_send(
 
     # Don't email the manager if the requests can't be saved afterwards.
     check_log_writable(service.request_log_path)
+    check_log_writable(service.email_log_path)
 
     # request_approval() below only accepts known managers.
     service.add_manager(settings.manager_name)
-    email = build_approval_email(batch, settings.user_name, settings.manager_name)
+    sent_at = service.clock()
+    email = _batch_email(settings, batch, sent_at)
     message = build_message(
         email,
         settings.user_name,
@@ -636,10 +800,7 @@ def approval_batch_send(
         sender.send(message)
     except Exception as exc:
         # Log the failure type and message, never the SMTP password.
-        detail = f"{type(exc).__name__}: {exc}"
-        if SMTP_PASSWORD:
-            detail = detail.replace(SMTP_PASSWORD, "***")
-        logger.error("Approval email could not be sent: %s", detail)
+        logger.error("Approval email could not be sent: %s", _safe_error(exc))
         raise HTTPException(
             status_code=502, detail="Approval email could not be sent."
         ) from None
@@ -647,7 +808,7 @@ def approval_batch_send(
     # Only after a successful send: new tickets move to awaiting_decision.
     newly_requested, reminders = [], []
     for ticket in batch:
-        if ticket["approval_stage"] != "not_requested":
+        if ticket["send_reason"] != "new":
             reminders.append(ticket["ticket_id"])
             continue
         try:
@@ -658,12 +819,169 @@ def approval_batch_send(
         except AlreadyRequested:
             reminders.append(ticket["ticket_id"])
 
+    # One write for the whole email, so a failure leaves no partial rows.
+    try:
+        service.log_emails(batch, sent_at)
+    except LogWriteError as exc:
+        logger.error("Could not write %s: %s", exc.file_name, exc.__cause__)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"The approval email was sent, but {exc.file_name} could not be "
+                "saved, so reminders may come back early. Close it if it is open "
+                "in Excel."
+            ),
+        ) from None
+
     return {
         "sent": True,
         "ticket_ids": email["ticket_ids"],
         "newly_requested": newly_requested,
         "reminders": reminders,
+        "next_reminder_due_at": service.next_reminder_due_at(),
     }
+
+
+# Confirmation page for the Approve/Reject links ------------------------------
+#
+# GET only shows a page: email security scanners and mail clients open links
+# by themselves, so nothing may be recorded until the manager presses Confirm.
+
+
+def _checked_link(
+    token: str,
+    settings: ApprovalSettings,
+    service: EscalationService,
+    no_decision_status: int,
+):
+    """(claims, ticket, None) if the link can be confirmed, else (None, None, page)."""
+
+    def blocked(content: str, status_code: int):
+        return None, None, _page_response(content, status_code)
+
+    if not settings.link_secret or not settings.manager_name:
+        return blocked(pages.not_configured_page(), 503)
+    try:
+        claims = read_token(token, settings.link_secret, service.clock())
+    except InvalidLink:
+        return blocked(pages.invalid_page(), 400)
+    except ExpiredLink as exc:
+        ticket_id = exc.claims.ticket_id
+        escalation = service.escalation_for(ticket_id) if ticket_id in service.tickets else None
+        if escalation and escalation["decision"]:
+            return blocked(pages.already_decided_page(ticket_id, escalation), 409)
+        return blocked(pages.expired_page(), 410)
+
+    ticket_id = claims.ticket_id
+    if ticket_id not in service.tickets:
+        return blocked(
+            pages.no_decision_needed_page(
+                ticket_id, "is not in the Help Desk export, so no decision is needed."
+            ),
+            no_decision_status,
+        )
+    escalation = service.escalation_for(ticket_id)
+    if escalation and escalation["decision"]:
+        return blocked(pages.already_decided_page(ticket_id, escalation), 409)
+    ticket = service.ticket_summary(ticket_id)
+    if not service.is_urgent_open(ticket):
+        return blocked(
+            pages.no_decision_needed_page(
+                ticket_id, "is no longer an urgent open ticket, so no decision is needed."
+            ),
+            no_decision_status,
+        )
+    if ticket["approval_stage"] != "awaiting_decision":
+        return blocked(
+            pages.no_decision_needed_page(
+                ticket_id, "is not waiting for approval, so no decision is needed."
+            ),
+            no_decision_status,
+        )
+    return claims, ticket, None
+
+
+@app.get(RESPOND_PATH, response_class=HTMLResponse)
+def approval_respond_page(
+    token: str = "",
+    settings: ApprovalSettings = Depends(get_approval_settings),
+    service: EscalationService = Depends(get_escalation_service),
+):
+    """Shows the ticket and a Confirm button. Never records anything."""
+    claims, ticket, page = _checked_link(token, settings, service, no_decision_status=200)
+    if page:
+        return page
+    return _page_response(
+        pages.confirm_page(ticket, claims.decision, f"{RESPOND_PATH}?token={token}")
+    )
+
+
+def _send_result_email(
+    settings: ApprovalSettings,
+    sender: SmtpEmailSender,
+    ticket: dict,
+    decision: str,
+    decided_at: datetime,
+) -> bool:
+    """Email the result to the user, manager in Cc. False (logged) on failure."""
+    ticket_id = ticket["ticket_id"]
+    missing = settings.missing_email_setting() or sender.missing_setting()
+    if missing:
+        logger.warning("Result email for %s not sent: %s is not set.", ticket_id, missing)
+        return False
+    email = build_result_email(ticket, decision, settings.manager_name, decided_at)
+    message = build_result_message(
+        email,
+        settings.user_name,
+        settings.user_email,
+        settings.manager_name,
+        settings.manager_email,
+    )
+    try:
+        sender.send(message)
+    except Exception as exc:
+        logger.warning(
+            "Result email for %s could not be sent: %s", ticket_id, _safe_error(exc)
+        )
+        return False
+    return True
+
+
+@app.post(RESPOND_PATH, response_class=HTMLResponse)
+def approval_respond_confirm(
+    token: str = "",
+    settings: ApprovalSettings = Depends(get_approval_settings),
+    service: EscalationService = Depends(get_escalation_service),
+    sender: SmtpEmailSender = Depends(get_email_sender),
+):
+    """Checks the link again and records the decision as the manager."""
+    claims, ticket, page = _checked_link(token, settings, service, no_decision_status=409)
+    if page:
+        return page
+
+    ticket_id, decision = claims.ticket_id, claims.decision
+    try:
+        service.record_decision(ticket_id, decision, settings.manager_name)
+    except AlreadyDecided:
+        # Decided by another click between the check and now.
+        escalation = service.escalation_for(ticket_id)
+        return _page_response(pages.already_decided_page(ticket_id, escalation), 409)
+    except (TicketNotFound, NotAnEscalation):
+        return _page_response(
+            pages.no_decision_needed_page(
+                ticket_id, "is not waiting for approval, so no decision is needed."
+            ),
+            409,
+        )
+
+    decided_at = service.recorded[ticket_id]["decided_at"]
+    # The decision stays recorded even if this email fails.
+    email_sent = _send_result_email(settings, sender, ticket, decision, decided_at)
+    return _page_response(
+        pages.recorded_page(
+            ticket_id, decision, settings.manager_name, decided_at, email_sent
+        )
+    )
 
 
 @app.post("/approvals/reply/preview")
@@ -820,8 +1138,12 @@ def _file_status(path: str, required_column: Optional[str] = None) -> str:
 
 
 def _logs_writable() -> str:
-    """Whether both logs could be appended to. Creates and changes nothing."""
-    for path in (Path(DECISION_LOG_PATH), Path(APPROVAL_REQUEST_LOG_PATH)):
+    """Whether the logs could be appended to. Creates and changes nothing."""
+    for path in (
+        Path(DECISION_LOG_PATH),
+        Path(APPROVAL_REQUEST_LOG_PATH),
+        Path(APPROVAL_EMAIL_LOG_PATH),
+    ):
         if path.exists():
             if not os.access(path, os.W_OK):
                 return "not_writable"
