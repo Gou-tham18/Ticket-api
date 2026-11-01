@@ -200,16 +200,30 @@ def _append_csv_row(path: Path, fieldnames: List[str], row: Dict[str, str]) -> N
     _append_csv_rows(path, fieldnames, [row])
 
 
+def _is_blank_file(path: Path) -> bool:
+    """True if the file is missing or holds only whitespace (no header yet)."""
+    if not path.exists():
+        return True
+    with open(path, "rb") as file:
+        return not any(line.strip() for line in file)
+
+
 def _append_csv_rows(path: Path, fieldnames: List[str], rows: List[Dict[str, str]]) -> None:
-    """Append several rows in a single write, so none are half-written."""
+    """Append several rows in a single write, so none are half-written.
+
+    A file with only blank lines is replaced, so the header is the first
+    line; otherwise the reader would take the blank line as the header and
+    drop every row.
+    """
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=fieldnames)
     try:
-        if not path.exists() or path.stat().st_size == 0:
+        blank = _is_blank_file(path)
+        if blank:
             writer.writeheader()
         writer.writerows(rows)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", newline="", encoding="utf-8") as file:
+        with open(path, "w" if blank else "a", newline="", encoding="utf-8") as file:
             file.write(buffer.getvalue())
     except OSError as exc:
         raise LogWriteError(path.name) from exc
