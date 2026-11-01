@@ -85,6 +85,7 @@ Nothing is required: the app starts and the escalation pages work without a `.en
 | `APPROVAL_USER_NAME`, `APPROVAL_USER_EMAIL` | Sending approval emails: the team member who sends | none |
 | `APPROVAL_MANAGER_NAME`, `APPROVAL_MANAGER_EMAIL` | Sending approval emails: the manager who decides | none |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS` | Sending approval emails | port `587`, TLS `true` |
+| `BREVO_API_KEY` | Sending approval emails through Brevo's HTTPS API instead of SMTP. When set, the `SMTP_*` settings are not used. See [Sending email on Render](#sending-email-on-render-brevo) | none: SMTP is used |
 | `PUBLIC_BASE_URL` | Sending approval emails: where the manager's browser reaches this backend, for example `https://your-name.ngrok-free.dev`. Must start with `https://` (`http://` for local testing only); a trailing `/` is removed | none: sending returns `503` |
 | `APPROVAL_LINK_SECRET` | Sending approval emails: signs the Approve/Reject links. At least 32 characters. Generate with `python -c "import secrets; print(secrets.token_urlsafe(32))"` | none: sending returns `503` |
 | `APPROVAL_LINK_DAYS` | How long Approve/Reject links work (whole days, 1 to 30) | `7` |
@@ -121,6 +122,17 @@ SMTP_USE_TLS=true
 ```
 
 To test without sending real email, run a local server that prints messages instead (`pip install aiosmtpd`, then `python -m aiosmtpd -n -l localhost:1025`) and set `SMTP_HOST=localhost`, `SMTP_PORT=1025`, `SMTP_USE_TLS=false`, with no username or password.
+
+### Sending email on Render (Brevo)
+
+Render's free instances block outgoing SMTP ports (25, 465, 587), so Gmail SMTP fails there with `OSError: [Errno 101] Network is unreachable`. Brevo sends over HTTPS (port 443) instead, and its free plan allows 300 emails a day.
+
+1. Create a free account at brevo.com.
+2. Under **Senders, Domains & Dedicated IPs → Senders**, add `APPROVAL_USER_EMAIL` as a sender and click the link Brevo emails to it.
+3. Under **SMTP & API → API Keys**, create an API key (it starts with `xkeysib-`).
+4. Set `BREVO_API_KEY` in the backend environment and restart. The `SMTP_*` settings can stay; they are ignored while `BREVO_API_KEY` is set.
+
+Messages from a Gmail address sent through Brevo may land in the manager's spam folder at first; mark one as "Not spam".
 
 ### Approve/Reject buttons: run with ngrok
 
@@ -244,7 +256,7 @@ Backend settings:
 - Build command: `pip install -r requirements.txt`
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 - Health check path: `/health`
-- Environment: `GEMINI_API_KEY`, and the `APPROVAL_*` and `SMTP_*` settings if emails should be sent. Set them in the service's Environment settings, not in a committed file.
+- Environment: `GEMINI_API_KEY`, and the `APPROVAL_*` settings, `PUBLIC_BASE_URL` (the backend's Render URL) and `BREVO_API_KEY` if emails should be sent. SMTP does not work on the free tier. Set them in the service's Environment settings, not in a committed file.
 
 Frontend settings:
 
@@ -265,7 +277,7 @@ If the frontend URL changes, add it to `ALLOWED_ORIGINS` in `app/main.py`. On Re
 - **"Email approval is not configured: PUBLIC_BASE_URL is not set" (503)** (or `APPROVAL_LINK_SECRET`): add it to the backend `.env` and restart. Check the backend log for a warning if it is set but ignored (wrong prefix, or a secret under 32 characters).
 - **The manager's button says "This link is not valid"**: the secret changed since the email was sent, or the link was cut. Send again when the reminder is due.
 - **"Nothing to send yet"** (409): every ticket was emailed recently; it comes back as a Reminder when the date shown is reached.
-- **"Approval email could not be sent" (502)**: the backend terminal shows the reason. For Gmail, check that `SMTP_USERNAME` is the sending address and `SMTP_PASSWORD` is an App Password, not the normal password.
+- **"Approval email could not be sent" (502)**: the backend terminal shows the reason. For Gmail, check that `SMTP_USERNAME` is the sending address and `SMTP_PASSWORD` is an App Password, not the normal password. `Network is unreachable` on Render means SMTP is blocked: set `BREVO_API_KEY`. `Brevo returned 400` or `401` gives Brevo's reason: usually an unverified sender or a wrong key.
 - **"Could not save to … Close it if it is open in Excel"**: close the log file in Excel and try again.
 - **Port 8000 or 5173 already in use**: stop the other process, or start on another port (`--port 8001`) and update `VITE_API_BASE_URL` to match.
 - **`pytest` fails in `test_api.py`**: a `TICKETS_DATA_PATH` left set in the terminal overrides the test data. Run `Remove-Item Env:TICKETS_DATA_PATH` (PowerShell) or `unset TICKETS_DATA_PATH`.
