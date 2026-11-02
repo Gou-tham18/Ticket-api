@@ -24,6 +24,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app import approval_pages as pages
 from app.approval_email import (
     DATE_FORMAT,
+    BrevoEmailSender,
+    BrevoSettings,
+    EmailSender,
     SmtpEmailSender,
     SmtpSettings,
     build_approval_email,
@@ -445,6 +448,9 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").strip().lower() not in (
     "false", "0", "no",
 )
+# When set, email goes through Brevo's HTTPS API instead of SMTP. Needed on
+# hosts that block outgoing SMTP ports (Render's free tier). Never logged.
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "").strip()
 
 # Approve/Reject buttons in the email.
 DEFAULT_LINK_DAYS = 7
@@ -600,7 +606,9 @@ def get_approval_settings() -> ApprovalSettings:
     )
 
 
-def get_email_sender() -> SmtpEmailSender:
+def get_email_sender() -> EmailSender:
+    if BREVO_API_KEY:
+        return BrevoEmailSender(BrevoSettings(api_key=BREVO_API_KEY))
     try:
         port = int(SMTP_PORT)
     except ValueError:
@@ -674,7 +682,7 @@ def urgent_open_approvals(
 @app.get("/approvals/config")
 def approval_config(
     settings: ApprovalSettings = Depends(get_approval_settings),
-    sender: SmtpEmailSender = Depends(get_email_sender),
+    sender: EmailSender = Depends(get_email_sender),
 ):
     """Who sends and who approves. No addresses, SMTP details or link values."""
     buttons_missing = settings.missing_link_settings()
@@ -729,7 +737,7 @@ def _batch_email(settings: ApprovalSettings, batch: list, sent_at: datetime) -> 
 def _safe_error(exc: Exception) -> str:
     """Exception type and message with any secret masked, for the log."""
     detail = f"{type(exc).__name__}: {exc}"
-    for secret in (SMTP_PASSWORD, APPROVAL_LINK_SECRET):
+    for secret in (SMTP_PASSWORD, BREVO_API_KEY, APPROVAL_LINK_SECRET):
         if secret:
             detail = detail.replace(secret, "***")
     return detail
@@ -766,7 +774,7 @@ def approval_batch_preview(
 def approval_batch_send(
     settings: ApprovalSettings = Depends(require_approval_names),
     service: EscalationService = Depends(get_escalation_service),
-    sender: SmtpEmailSender = Depends(get_email_sender),
+    sender: EmailSender = Depends(get_email_sender),
 ):
     missing = settings.missing_email_setting()
     if missing:
@@ -918,7 +926,7 @@ def approval_respond_page(
 
 def _send_result_email(
     settings: ApprovalSettings,
-    sender: SmtpEmailSender,
+    sender: EmailSender,
     ticket: dict,
     decision: str,
     decided_at: datetime,
@@ -952,7 +960,7 @@ def approval_respond_confirm(
     token: str = "",
     settings: ApprovalSettings = Depends(get_approval_settings),
     service: EscalationService = Depends(get_escalation_service),
-    sender: SmtpEmailSender = Depends(get_email_sender),
+    sender: EmailSender = Depends(get_email_sender),
 ):
     """Checks the link again and records the decision as the manager."""
     claims, ticket, page = _checked_link(token, settings, service, no_decision_status=409)
@@ -1159,7 +1167,7 @@ def _logs_writable() -> str:
 @app.get("/health")
 def health(
     settings: ApprovalSettings = Depends(get_approval_settings),
-    sender: SmtpEmailSender = Depends(get_email_sender),
+    sender: EmailSender = Depends(get_email_sender),
 ):
     """Fast, local-only status for monitoring. Always 200 while running.
 

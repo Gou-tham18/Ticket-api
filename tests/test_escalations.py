@@ -245,6 +245,20 @@ def test_recorded_decisions_survive_a_restart(files, service):
     assert reloaded.ticket_view("TCK-6")["escalation"]["decision"] == "Reject"
 
 
+@pytest.mark.parametrize("blank", ["\n", "\r\n", "  \n\n"])
+def test_decision_in_a_log_with_only_blank_lines_survives_a_restart(files, service, blank):
+    # The committed decision_log.csv held a single newline, so the header was
+    # never written and the decision was lost on the next reload.
+    export, tracker, log = files
+    log.write_text(blank, encoding="utf-8")
+    service.record_decision("TCK-6", "Reject", "Anil")
+
+    reloaded = EscalationService(export, tracker, log)
+
+    assert reloaded.ticket_view("TCK-6")["escalation"]["decision"] == "Reject"
+    assert log.read_text(encoding="utf-8").splitlines()[0] == "ticket_id,decision,decided_by,decided_at"
+
+
 def test_cannot_overwrite_a_final_decision(service):
     with pytest.raises(AlreadyDecided):
         service.record_decision("TCK-1", "Reject", "Anil")

@@ -7,13 +7,16 @@ email sent after a decision is built here too. Standard library only.
 """
 
 import html
+import json
 import smtplib
 import ssl
-from dataclasses import dataclass
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
 from datetime import datetime
 from email.message import EmailMessage
-from email.utils import formataddr
-from typing import Dict, List, Optional
+from email.utils import formataddr, getaddresses, parseaddr
+from typing import Dict, List, Optional, Union
 
 from app.ticket_summary import parse_timestamp
 
@@ -238,6 +241,79 @@ class SmtpEmailSender:
             if s.username:
                 server.login(s.username, s.password)
             server.send_message(message)
+
+
+BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
+
+
+@dataclass(frozen=True)
+class BrevoSettings:
+    api_key: str = field(default="", repr=False)
+
+    def missing_setting(self) -> Optional[str]:
+        return None if self.api_key else "BREVO_API_KEY"
+
+
+def _contacts(message: EmailMessage, header: str) -> List[Dict]:
+    return [
+        {"email": email, **({"name": name} if name else {})}
+        for name, email in getaddresses(message.get_all(header, []))
+        if email
+    ]
+
+
+def brevo_payload(message: EmailMessage) -> Dict:
+    """The Brevo transactional email JSON for a message built here."""
+    sender_name, sender_email = parseaddr(message["From"])
+    payload = {
+        "sender": {"email": sender_email, **({"name": sender_name} if sender_name else {})},
+        "to": _contacts(message, "To"),
+        "subject": message["Subject"],
+        "textContent": message.get_body(("plain",)).get_content(),
+        "htmlContent": message.get_body(("html",)).get_content(),
+    }
+    cc = _contacts(message, "Cc")
+    if cc:
+        payload["cc"] = cc
+    if message["Reply-To"]:
+        payload["replyTo"] = {"email": parseaddr(message["Reply-To"])[1]}
+    return payload
+
+
+class BrevoEmailSender:
+    """Sends one message through Brevo's HTTPS API (port 443).
+
+    For hosts that block outgoing SMTP, such as Render's free instances.
+    The From address must be a verified sender in Brevo.
+    """
+
+    def __init__(self, settings: BrevoSettings):
+        self.settings = settings
+
+    def missing_setting(self) -> Optional[str]:
+        return self.settings.missing_setting()
+
+    def send(self, message: EmailMessage) -> None:
+        request = urllib.request.Request(
+            BREVO_API_URL,
+            data=json.dumps(brevo_payload(message)).encode("utf-8"),
+            headers={
+                "api-key": self.settings.api_key,
+                "accept": "application/json",
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30):
+                pass
+        except urllib.error.HTTPError as exc:
+            # Brevo's reason, e.g. an unverified sender; it never echoes the key.
+            reason = exc.read().decode("utf-8", "replace")[:500]
+            raise RuntimeError(f"Brevo returned {exc.code}: {reason}") from None
+
+
+EmailSender = Union[SmtpEmailSender, BrevoEmailSender]
 
 
 def _with_bodies(message: EmailMessage, email: Dict) -> EmailMessage:
